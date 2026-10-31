@@ -48,5 +48,7 @@ class RobertoZonesOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({
                 vol.Required(CONF_MAP_ENTITY, default=old[CONF_MAP_ENTITY]): str,
                 vol.Required(CONF_VACUUM_ENTITY, default=old[CONF_VACUUM_ENTITY]): str,
+                vol.Optional("position_entity", default=old.get("position_entity", "")): str,
+                vol.Optional("charger_entity", default=old.get("charger_entity", "")): str,
             }),
         )

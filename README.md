@@ -1,47 +1,37 @@
 # MakeRobertoGreatAgain – Roberto Zones
 
-**Version 0.3.0** · Home Assistant custom integration · event-driven map diagnostics and supervised manual step tests
+## Version 0.5.0: local read-only world map diagnostics
 
-This project explores resource-efficient map alignment for the Xiaomi Mi Robot Vacuum V1 (`rockrobo.vacuum.v1`) in Home Assistant.
+Home Assistant custom integration for the Xiaomi Mi Robot Vacuum V1 (rockrobo.vacuum.v1). Runs inside Home Assistant Core without an additional VM, container or modified firmware.
 
-**Safety:** This version sends no automatic vacuum commands. The only possible motion is an explicit, short remote-control step with per-step confirmation and idle-state checks. It does not enforce No-Go zones. Map orientation is only a candidate, not a validated navigation coordinate transform. Do not use its output to authorize unattended cleaning.
+**Experimental. No automatic navigation, no software-enforced no-go zones, no physical safety certification.** The existing manual short-step test services are unchanged.
 
-## Install via Home Assistant Marketplace (2026.11 beta or later)
+### Install/update
 
-1. Open **Settings → Marketplace** in Home Assistant.
-2. Use **Add custom repository / Add by link** and provide: https://github.com/XAllnet/MakeRobertoGreatAgain
-3. Choose **Integration** and install **Roberto Zones**.
-4. Restart Home Assistant Core.
-5. Open **Settings → Devices & services → Add integration → Roberto Zones (Diagnose)**.
-6. Set the live image entity (for example `image.wohnzimmer_roberto_blanko_live_map`) and your **local Xiaomi Miio** vacuum entity.
+Add https://github.com/XAllnet/MakeRobertoGreatAgain as a custom **Integration** repository in the Home Assistant 2026.11 Marketplace. Update Roberto Zones to 0.5.0 and restart Home Assistant.
 
-Until a reference is available the status is `referenz_fehlt`.
-**New in 0.2.0: import a historical map screenshot through the web UI.** Open **Settings → Tools → Actions**, select `roberto_zones.import_reference`, and upload a PNG/JPG via the image field. The image is held by Home Assistant's image-upload store and normalized into a private PNG reference at `/config/roberto_zones/reference.png`. It overwrites the old reference. A screenshot is not an original Xiaomi navigation map and does not provide trustworthy navigation coordinates.
+### Position / charger
 
-Alternatively, when a **complete** current map is available, run action `roberto_zones.capture_reference` to store a private reference at `/config/roberto_zones/reference.png`. The action replaces an existing reference. To analyze immediately, run `roberto_zones.analyze_now`.
+The Xiaomi Cloud Map Extractor v3 alpha exposes two diagnostic sensors, \`vacuum_position\` and \`charger_position\`, typically disabled in the entity registry. Enable them in Settings → Devices & services → Xiaomi Cloud Map Extractor → Entities. Roberto Zones auto-detects sensors associated with the **same map-extractor config entry** as your configured live image entity; if necessary set explicit \`position_entity\` and \`charger_entity\` under Roberto Zones Configure/Options.
 
-The image is processed only on relevant map state changes while cleaning, with throttling and debounce; the integration has no polling timer. Map analysis runs in Home Assistant's executor.
+Positions come from the *reported Xiaomi map* and are **not independently verified physical positions**. Null/unknown means no position fix.
 
-## Supervised steering tests (0.3.0)
+### Reference/live overlay
 
-In **Settings → Tools → Actions**, choose `roberto_zones.test_move_step`. Select a direction and explicitly confirm supervision and a fully clear floor. Each action triggers **one** small movement using `xiaomi_miio.vacuum_remote_control_move_step`; the Miio service enters remote-control mode, performs the step and stops. No fan speed or cleaning actions are issued. The robot must have the **local Xiaomi Miio** entity (domain `xiaomi_miio`) configured and be `idle` or `docked`. Test on a completely clear open floor under direct supervision.
+The \`image\` entity **Referenz und Live-Karte** displays:
+- A **side-by-side**, explicitly *unaligned*, comparison if the reference came from a historical Xiaomi app screenshot with no image-to-world calibration.
+- A world-calibrated overlay when the reference and current map both have valid Xiaomi calibration points.
 
-`roberto_zones.stop_test_drive` attempts `vacuum.stop` plus remote-control stop. If connection is lost, press the robot's physical stop button.
+To create a world-calibrated reference, first let Roberto build a **complete map**. Then run \`roberto_zones.capture_reference\` from Settings → Tools → Actions. It saves original map bytes and matching \`calibration_points\` (with SHA256 binding) *locally* in \`/config/roberto_zones/\`. A historical screenshot can be uploaded with \`roberto_zones.import_reference\`, but that discards any prior calibration to prevent mismatched transforms.
 
-**No map target navigation in this version.** A current screenshot cannot yet be trusted for navigation. The 7 no-go reference zones are not enforced and cables remain dangerous.
+Gray = saved reference, turquoise = freshly scanned floor; yellow = reported robot, green = reported dock. Overlap is a **visual plausibility indicator** and is never enough to authorize unattended travel. Image and sensor data originate from the same map extractor and do not independently confirm absolute physical location.
 
-## Updates
+### Proving coordinates before navigation
 
-For this early version the Marketplace can install directly from the repository's default branch, even without a GitHub release. Later tagged releases can provide versioned update notifications. Home Assistant Core may need a restart after updating.
+The Xiaomi dock is approximately at (25500,25500) in native vacuum coordinates. First check the reported location when docked. Then manually test two widely separated safe checkpoints in different directions, verify the robot's **physical presence** there, and compare to the reported \`vacuum_position\` and transformed image pixels. If any source is missing, inconsistent, or stale, **fail closed**. No calculated target is sent by this version.
 
-## Privacy
+More detailed instructions: [README_DE.md](README_DE.md).
 
-No apartment screenshots, cleaning history, coordinate lists, tokens or cloud credentials are committed. The private reference is created on the Home Assistant machine and remains outside the installed integration folder.
+### Privacy and runtime
 
-## Limitations
-
-This is an experimental proof of concept not yet validated on the user's Home Assistant VM, not yet validated on the user's Home Assistant VM. The original Xiaomi V1 resets its map during new whole-house cleaning sessions. Image rotation alone cannot verify the robot's navigation coordinate system. External software cannot guarantee the robot will avoid cables; dangerous areas require physical protection.
-
-See [German notes](README_DE.md).
-
-Licensed under the repository's GPL-3.0 license.
+The reference image and calibration remain inside Home Assistant and are not part of this public GitHub repository. The integration only reacts to relevant state changes, throttles work, and uses Home Assistant's executor for image processing.

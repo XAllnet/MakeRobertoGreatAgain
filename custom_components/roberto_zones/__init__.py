@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import time
 import voluptuous as vol
@@ -15,6 +17,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_MAP_ENTITY,
@@ -26,10 +29,11 @@ from .const import (
 )
 from .matcher import compare
 from .reference_image import prepare_reference_image, MAX_INPUT_BYTES
+from .world_overlay import build_overlay, parse_position
 from .manual_test import SupervisedDrive, TEST_STEPS
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.SENSOR, Platform.IMAGE]
 
 
 class RobertoController:
@@ -52,6 +56,13 @@ class RobertoController:
         self._last_run_monotonic = 0.0
         self._closed = False
         self._reference = Path(hass.config.path("roberto_zones", "reference.png"))
+        self._reference_meta = Path(hass.config.path("roberto_zones", "reference_calibration.json"))
+        self.overlay_bytes: bytes | None = None
+        self.overlay_time: datetime | None = None
+        self.position: dict | None = None
+        self.position_source: str | None = None
+        self._position_entity: str | None = None
+        self._charger_entity: str | None = None
         self.drive = SupervisedDrive(hass, self)
 
     @property
@@ -66,9 +77,33 @@ class RobertoController:
             CONF_VACUUM_ENTITY, self.entry.data[CONF_VACUUM_ENTITY]
         )
 
+    def _source_entity(self, option_name: str, key: str) -> str | None:
+        """Find map extractor v3 diagnostic entities from the map's entry."""
+        specified = self.entry.options.get(option_name, "")
+        if specified:
+            return specified
+        registry = er.async_get(self.hass)
+        map_entry = registry.async_get(self.map_entity)
+        if map_entry is None or not map_entry.config_entry_id:
+            return None
+        candidates = [
+            ent.entity_id
+            for ent in registry.entities.values()
+            if ent.config_entry_id == map_entry.config_entry_id
+            and ent.platform == "xiaomi_cloud_map_extractor"
+            and (ent.unique_id.endswith(key) or ent.entity_id.endswith(key))
+        ]
+        return sorted(candidates)[0] if candidates else None
+
     async def async_start(self) -> None:
+        self._position_entity = self._source_entity("position_entity", "vacuum_position")
+        self._charger_entity = self._source_entity("charger_entity", "charger_position")
+        entities = [self.map_entity, self.vacuum_entity]
+        for entity in (self._position_entity, self._charger_entity):
+            if entity and entity not in entities:
+                entities.append(entity)
         self.listeners.append(async_track_state_change_event(
-            self.hass, [self.map_entity, self.vacuum_entity], self._handle_change
+            self.hass, entities, self._handle_change
         ))
         self._schedule(4.0)
 
@@ -89,14 +124,17 @@ class RobertoController:
                 self.status = "neuer_reinigungsvorgang"
                 self.rotation = None
                 self._notify()
+                self._schedule(DEBOUNCE_SECONDS)
+            return
+        if new.entity_id in (self._position_entity, self._charger_entity):
+            if old is None or old.state != new.state:
+                self._schedule(DEBOUNCE_SECONDS)
             return
         if new.entity_id == self.map_entity and (
             old is None or old.state != new.state
         ):
             self.last_map_state = new.state
-            vacuum = self.hass.states.get(self.vacuum_entity)
-            if vacuum and vacuum.state == "cleaning":
-                self._schedule(DEBOUNCE_SECONDS)
+            self._schedule(DEBOUNCE_SECONDS)
 
     @callback
     def _schedule(self, delay: float) -> None:
@@ -119,6 +157,17 @@ class RobertoController:
     def _handle_due(self, _now: datetime) -> None:
         self._cancel_debounce = None
         self.hass.async_create_task(self.async_analyze())
+
+    def _get_map_position(self, entity_id: str | None, key: str, map_state):
+        if entity_id:
+            state = self.hass.states.get(entity_id)
+            if state is not None:
+                position = parse_position(state.attributes)
+                if position is None:
+                    position = parse_position(state.state)
+                if position is not None:
+                    return position
+        return parse_position(map_state.attributes.get(key))
 
     async def async_analyze(self) -> None:
         if self._closed:
@@ -149,11 +198,44 @@ class RobertoController:
             reference_bytes = await self.hass.async_add_executor_job(
                 self._reference.read_bytes
             )
-            result = await self.hass.async_add_executor_job(
-                compare, image.content, reference_bytes
+            try:
+                result = await self.hass.async_add_executor_job(
+                    compare, image.content, reference_bytes
+                )
+            except ValueError:
+                result = {"candidate_is_distinct": False,
+                          "note": "Silhouettenvergleich noch nicht möglich"}
+            robot = self._get_map_position(self._position_entity, "vacuum_position", state)
+            charger = self._get_map_position(self._charger_entity, "charger", state)
+            self.position = robot
+            self.position_source = (
+                self._position_entity if robot and self._position_entity
+                else ("legacy_image_attribute" if robot else None)
             )
+
+            def prepare_overlay():
+                reference_calibration = None
+                if self._reference_meta.is_file():
+                    stored = json.loads(self._reference_meta.read_text(encoding="utf-8"))
+                    if stored.get("sha256") == hashlib.sha256(reference_bytes).hexdigest():
+                        reference_calibration = stored.get("calibration_points")
+                return build_overlay(
+                    reference_bytes, image.content, reference_calibration,
+                    calibration, robot, charger,
+                )
+
+            overlay, overlay_info = await self.hass.async_add_executor_job(
+                prepare_overlay
+            )
+            if not self._closed:
+                self.overlay_bytes = overlay
+                self.overlay_time = datetime.now().astimezone()
             self.details = {
                 **result,
+                **overlay_info,
+                "position_entity": self._position_entity,
+                "charger_entity": self._charger_entity,
+                "position_source": self.position_source,
                 "map_entity": self.map_entity,
                 "vacuum_entity": self.vacuum_entity,
                 "calibration_present": calibration is not None,
@@ -163,13 +245,19 @@ class RobertoController:
                 "run_count_observed_since_setup": self.run_count,
             }
             self.rotation = (
-                result["candidate_rotation_degrees"]
-                if result["candidate_is_distinct"] else None
+                result.get("candidate_rotation_degrees")
+                if result.get("candidate_is_distinct") else None
             )
-            self.status = (
-                "kandidat_nicht_verifiziert"
-                if self.rotation is not None else "orientierung_unklar"
-            )
+            if not overlay_info["reference_calibrated"]:
+                self.status = "referenz_ohne_koordinaten"
+            elif not overlay_info["live_calibrated"]:
+                self.status = "live_kalibrierung_fehlt"
+            elif not overlay_info.get("visual_alignment_candidate", False):
+                self.status = "ausrichtung_nicht_bestaetigt"
+            elif not robot:
+                self.status = "position_nicht_verfuegbar"
+            else:
+                self.status = "ueberlagerung_plausibel_pruefung_offen"
             self.last_analysis = datetime.now().astimezone().isoformat(
                 timespec="seconds"
             )
@@ -210,6 +298,18 @@ class RobertoController:
             temp = self._reference.with_suffix(".tmp")
             temp.write_bytes(raw)
             temp.replace(self._reference)
+            # Capture the exact image calibration alongside its hash; never
+            # borrow calibration from a different reference image or run.
+            calibration = state.attributes.get("calibration_points")
+            values = {
+                "schema": 1,
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "calibration_points": calibration if isinstance(calibration, list) else None,
+                "source": self.map_entity,
+            }
+            meta_tmp = self._reference_meta.with_suffix(".tmp")
+            meta_tmp.write_text(json.dumps(values), encoding="utf-8")
+            meta_tmp.replace(self._reference_meta)
 
         await self.hass.async_add_executor_job(save)
         self.status = "referenz_gespeichert"
@@ -249,6 +349,8 @@ class RobertoController:
             temp = self._reference.with_suffix(".tmp")
             temp.write_bytes(image_bytes)
             temp.replace(self._reference)
+            # A historical screenshot has no trustworthy world calibration.
+            self._reference_meta.unlink(missing_ok=True)
             return metadata
 
         try:

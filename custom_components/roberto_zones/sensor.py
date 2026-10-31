@@ -11,6 +11,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         RobertoDiagnosticSensor(controller),
         RobertoOrientationSensor(controller),
         RobertoTestDriveSensor(controller),
+        RobertoPositionSensor(controller),
     ])
 
 
@@ -25,7 +26,7 @@ class _BaseSensor(SensorEntity):
             "identifiers": {(DOMAIN, "roberto_zones_diagnostic")},
             "name": "Roberto Zones",
             "manufacturer": "Eigenentwicklung (lokal)",
-            "model": "0.3 Diagnose und manuelle Testfahrt",
+            "model": "0.5 Kartenüberlagerung und Positionsdiagnose",
         }
 
     async def async_added_to_hass(self):
@@ -57,6 +58,8 @@ class RobertoDiagnosticSensor(_BaseSensor):
         d["read_only"] = False
         d["automatic_drive_enabled"] = False
         d["manual_step_only"] = True
+        d["real_world_position_verified"] = False
+        d["overlay_is_not_navigation_authorization"] = True
         return d
 
 
@@ -93,4 +96,29 @@ class RobertoTestDriveSensor(_BaseSensor):
             "fan_cleaning_command_sent": False,
             "no_go_zones_enforced": False,
             "requires_supervision": True,
+        }
+
+
+class RobertoPositionSensor(_BaseSensor):
+    _attr_name = "Roboterposition (Xiaomi-Koordinaten)"
+    _attr_icon = "mdi:crosshairs-gps"
+    _attr_unique_id = "roberto_zones_robot_position_v1"
+
+    @property
+    def native_value(self):
+        pos = self.controller.position
+        if pos is None:
+            return "nicht_verfuegbar"
+        return f'{pos["x"]}, {pos["y"]}'
+
+    @property
+    def extra_state_attributes(self):
+        pos = self.controller.position
+        return {
+            "x_mm": pos["x"] if pos else None,
+            "y_mm": pos["y"] if pos else None,
+            "angle": pos.get("angle") if pos else None,
+            "source": self.controller.position_source,
+            "physical_location_confirmed": False,
+            "auto_navigation_enabled": False,
         }
