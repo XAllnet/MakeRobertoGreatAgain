@@ -1,4 +1,4 @@
-# Roberto Zones 0.5.0 – Kartenüberlagerung und Positionsdiagnose
+# Roberto Zones 0.5.1 – Kartenüberlagerung und Positionsdiagnose
 
 Die Integration nutzt die vorhandene Home-Assistant-Installation mit dem Xiaomi Cloud Map Extractor **3.0 alpha** und dem lokalen Xiaomi Miio. Kein zusätzlicher Container und keine Firmwareänderung.
 
@@ -6,7 +6,7 @@ Die Integration nutzt die vorhandene Home-Assistant-Installation mit dem Xiaomi 
 
 ## 1. Aktualisieren
 
-Marketplace → Roberto Zones → Version 0.5.0 installieren → Home Assistant Core neu starten. Die Integration muss nicht gelöscht und neu angelegt werden.
+Marketplace → Roberto Zones → Version 0.5.1 installieren → Home Assistant Core neu starten. Die Integration muss nicht gelöscht und neu angelegt werden.
 
 ## 2. Positionssensoren des Map Extractors einschalten
 
@@ -59,7 +59,15 @@ Das ist jedoch **noch keine unabhängige physische Positionsbestätigung**: Kali
 
 Die Bildberechnung läuft nur auf Bild- oder Positionsänderungen mit Debounce/Throttling und außerhalb des Home-Assistant-Event-Loops. Kein zusätzlicher Polling-Prozess.
 
-## 6. Achtung
+## 6. Aktualisierungslatenz (0.5.1)
+
+Roberto Zones übernimmt neue X-/Y-Werte unmittelbar nach einem Event des Map-Extractor-Positionssensors; die langsame Kartenbildanalyse blockiert die Positionsanzeige nicht mehr. Die Kartenüberlagerung behält die mindestens 15 Sekunden Abstand plus Debounce bei.
+
+Die Position zeigt die Attribute `source_entity_last_updated` (Home-Assistant-Zeitstempel des zuletzt geänderten Quellenzustands) und `received_by_roberto_zones_at`. Das ist **keine garantierte Messzeit am Roboter**; die Xiaomi Cloud kann die Messung bereits früher erstellt haben. Die auf der Karte eingezeichnete Position stammt aus dem letzten Bildvergleich und kann deshalb älter als der Positionssensor sein.
+
+**Nicht für laufende Lenkregelung, Kollisionsvermeidung oder laufende No-Go-Zonen-Korrektur benutzen.** Um einen Zielpunkt zu prüfen, Roberto anhalten lassen und anschließend auf ein stabiles Positionsupdate warten.
+
+## 7. Achtung
 
 Die Referenz ist **nur für Home Assistant**, nicht Robertos interne Karte. Der Xiaomi V1 beginnt normale Reinigungsläufe weiterhin ohne persistenten Grundriss. Er kann beliebige Wege zu Zielen wählen. Kabel/No-Go-Zonen lassen sich mit diesem Add-on bisher nicht zuverlässig schützen. Beim Bewegen können **Haupt- und Seitenbürsten mitlaufen**.
 

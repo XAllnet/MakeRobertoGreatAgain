@@ -61,6 +61,8 @@ class RobertoController:
         self.overlay_time: datetime | None = None
         self.position: dict | None = None
         self.position_source: str | None = None
+        self.position_source_last_changed: str | None = None
+        self.position_received_at: str | None = None
         self._position_entity: str | None = None
         self._charger_entity: str | None = None
         self.drive = SupervisedDrive(hass, self)
@@ -105,6 +107,7 @@ class RobertoController:
         self.listeners.append(async_track_state_change_event(
             self.hass, entities, self._handle_change
         ))
+        self._refresh_position(self.hass.states.get(self.map_entity))
         self._schedule(4.0)
 
     @callback
@@ -127,13 +130,22 @@ class RobertoController:
                 self._schedule(DEBOUNCE_SECONDS)
             return
         if new.entity_id in (self._position_entity, self._charger_entity):
-            if old is None or old.state != new.state:
+            if old is None or old.state != new.state or old.attributes != new.attributes:
+                if new.entity_id == self._position_entity:
+                    # Lightweight event handler: do not wait for the 15-second
+                    # image overlay throttle to update the position sensor.
+                    self._refresh_position(self.hass.states.get(self.map_entity))
+                    self._notify()
                 self._schedule(DEBOUNCE_SECONDS)
             return
         if new.entity_id == self.map_entity and (
-            old is None or old.state != new.state
+            old is None or old.state != new.state or old.attributes != new.attributes
         ):
             self.last_map_state = new.state
+            # Fallback for older extractors that expose position on the image.
+            if not self._position_entity:
+                self._refresh_position(new)
+                self._notify()
             self._schedule(DEBOUNCE_SECONDS)
 
     @callback
@@ -169,6 +181,38 @@ class RobertoController:
                     return position
         return parse_position(map_state.attributes.get(key))
 
+    @callback
+    def _refresh_position(self, map_state=None) -> None:
+        """Copy the most recently reported coordinate without image processing.
+
+        Home Assistant's last_updated is an entity-state timestamp and does
+        not guarantee the actual Xiaomi measurement time.
+        """
+        source = None
+        position = None
+        changed_at = None
+        if self._position_entity:
+            state = self.hass.states.get(self._position_entity)
+            if state is not None:
+                position = parse_position(state.attributes)
+                if position is None:
+                    position = parse_position(state.state)
+                if position is not None:
+                    source = self._position_entity
+                    changed_at = state.last_updated.isoformat()
+        if position is None and map_state is not None:
+            position = parse_position(map_state.attributes.get("vacuum_position"))
+            if position is not None:
+                source = self.map_entity
+                changed_at = map_state.last_updated.isoformat()
+        self.position = position
+        self.position_source = source
+        self.position_source_last_changed = changed_at
+        self.position_received_at = (
+            datetime.now().astimezone().isoformat(timespec="seconds")
+            if position is not None else None
+        )
+
     async def async_analyze(self) -> None:
         if self._closed:
             return
@@ -183,13 +227,7 @@ class RobertoController:
                 self.status = "kartenentitaet_nicht_gefunden"
                 self.details = {"map_entity": self.map_entity}
                 return
-            self.position = self._get_map_position(
-                self._position_entity, "vacuum_position", state
-            )
-            self.position_source = (
-                self._position_entity if self.position and self._position_entity
-                else ("legacy_image_attribute" if self.position else None)
-            )
+            self._refresh_position(state)
             if not self._reference.is_file():
                 self.status = "referenz_fehlt"
                 self.details = {
@@ -219,11 +257,9 @@ class RobertoController:
                           "note": "Silhouettenvergleich noch nicht möglich"}
             robot = self._get_map_position(self._position_entity, "vacuum_position", state)
             charger = self._get_map_position(self._charger_entity, "charger", state)
-            self.position = robot
-            self.position_source = (
-                self._position_entity if robot and self._position_entity
-                else ("legacy_image_attribute" if robot else None)
-            )
+            # Do not overwrite the fast, event-driven position sensor.
+            # The image rendering below uses the coordinate snapshot from
+            # this specific map analysis, not necessarily the newest reading.
 
             def prepare_overlay():
                 reference_calibration = None
@@ -248,6 +284,8 @@ class RobertoController:
                 "position_entity": self._position_entity,
                 "charger_entity": self._charger_entity,
                 "position_source": self.position_source,
+                "position_sensor_last_updated": self.position_source_last_changed,
+                "overlay_uses_position_snapshot": True,
                 "map_entity": self.map_entity,
                 "vacuum_entity": self.vacuum_entity,
                 "calibration_present": calibration is not None,
@@ -270,6 +308,9 @@ class RobertoController:
                 self.status = "position_nicht_verfuegbar"
             else:
                 self.status = "ueberlagerung_plausibel_pruefung_offen"
+            # Refresh again in case the position entity changed while
+            # the slow map rendering was running in the executor.
+            self._refresh_position(self.hass.states.get(self.map_entity))
             self.last_analysis = datetime.now().astimezone().isoformat(
                 timespec="seconds"
             )

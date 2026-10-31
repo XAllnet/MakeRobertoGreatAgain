@@ -1,6 +1,6 @@
 # MakeRobertoGreatAgain – Roberto Zones
 
-## Version 0.5.0: local read-only world map diagnostics
+## Version 0.5.1: local read-only world map diagnostics
 
 Home Assistant custom integration for the Xiaomi Mi Robot Vacuum V1 (rockrobo.vacuum.v1). Runs inside Home Assistant Core without an additional VM, container or modified firmware.
 
@@ -8,7 +8,7 @@ Home Assistant custom integration for the Xiaomi Mi Robot Vacuum V1 (rockrobo.va
 
 ### Install/update
 
-Add https://github.com/XAllnet/MakeRobertoGreatAgain as a custom **Integration** repository in the Home Assistant 2026.11 Marketplace. Update Roberto Zones to 0.5.0 and restart Home Assistant.
+Add https://github.com/XAllnet/MakeRobertoGreatAgain as a custom **Integration** repository in the Home Assistant 2026.11 Marketplace. Update Roberto Zones to 0.5.1 and restart Home Assistant.
 
 ### Position / charger
 
@@ -35,3 +35,7 @@ More detailed instructions: [README_DE.md](README_DE.md).
 ### Privacy and runtime
 
 The reference image and calibration remain inside Home Assistant and are not part of this public GitHub repository. The integration only reacts to relevant state changes, throttles work, and uses Home Assistant's executor for image processing.
+
+### Update in 0.5.1: low-latency position forwarding
+
+The map-extractor position sensor is now forwarded directly to the Roberto Zones position sensor on every source state/attribute change, independent of the expensive 15s-throttled image overlay. Attributes show HA entity update timestamps, which are **not robot-measurement timestamps**. The visual map marker may be older than the direct position sensor. Cloud latency remains; this is not suitable for continuous motor control or unattended no-go enforcement.

@@ -26,7 +26,7 @@ class _BaseSensor(SensorEntity):
             "identifiers": {(DOMAIN, "roberto_zones_diagnostic")},
             "name": "Roberto Zones",
             "manufacturer": "Eigenentwicklung (lokal)",
-            "model": "0.5 Kartenüberlagerung und Positionsdiagnose",
+            "model": "0.5.1 Positionsdiagnose und Kartenüberlagerung",
         }
 
     async def async_added_to_hass(self):
@@ -119,6 +119,10 @@ class RobertoPositionSensor(_BaseSensor):
             "y_mm": pos["y"] if pos else None,
             "angle": pos.get("angle") if pos else None,
             "source": self.controller.position_source,
+            "source_entity_last_updated": self.controller.position_source_last_changed,
+            "received_by_roberto_zones_at": self.controller.position_received_at,
+            "source_update_time_is_not_measurement_time": True,
+            "map_overlay_updates_separately": True,
             "physical_location_confirmed": False,
             "auto_navigation_enabled": False,
         }
