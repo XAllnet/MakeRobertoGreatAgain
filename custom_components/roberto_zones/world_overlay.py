@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 from io import BytesIO
+from collections.abc import Mapping
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageOps
@@ -27,8 +28,8 @@ def parse_position(value):
             value = json.loads(value)
         except (ValueError, TypeError):
             return None
-    if isinstance(value, dict):
-        if "position" in value and isinstance(value["position"], dict):
+    if isinstance(value, Mapping):
+        if "position" in value and isinstance(value["position"], Mapping):
             value = value["position"]
         try:
             x, y = float(value["x"]), float(value["y"])
