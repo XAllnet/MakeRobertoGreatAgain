@@ -17,3 +17,30 @@ import_reference:
           accept:
             - image/*
           image_upload: true
+test_move_step:
+  name: Testfahrt – ein kurzer Schritt ohne Saugen
+  description: Nur unter Aufsicht auf völlig freier Fläche verwenden. Ein einzelner, langsamer Fernsteuerungsschritt; keine automatische Kartenfahrt, keine Reinigung.
+  fields:
+    direction:
+      name: Richtung
+      required: true
+      selector:
+        select:
+          options:
+            - label: Vorwärts
+              value: forward
+            - label: Rückwärts
+              value: backward
+            - label: Links lenken
+              value: left
+            - label: Rechts lenken
+              value: right
+    supervised:
+      name: Roboter steht unter Aufsicht, Fläche ist frei
+      description: Vor jeder einzelnen Bewegung bestätigen.
+      required: true
+      selector:
+        boolean: {}
+stop_test_drive:
+  name: Testfahrt stoppen
+  description: Versucht Roberto sofort zu stoppen und die Fernsteuerung zu beenden. Bei einem Verbindungsproblem die physische Stopptaste verwenden.

@@ -1,8 +1,8 @@
-# Roberto Zones 0.2.0 – Diagnose
+# Roberto Zones 0.3.0 – Diagnose und Testfahrt
 
 Die Integration läuft direkt in Home Assistant OS, ohne zusätzlichen Container, ohne Root und ohne Valetudo.
 
-**Noch keine echten No-Go-Zonen.** Version 0.1.1 wertet nur die Live-Karte aus, schätzt mögliche Bildorientierungen und meldet Diagnosewerte. Es werden keine Befehle an den Roboter gesendet.
+**Noch keine echten No-Go-Zonen.** Die Integration bewertet Kartenorientierungen und erlaubt nur einzelne, ausdrücklich bestätigte Fernsteuerungsschritte. Es werden niemals automatisch Fahr- oder Reinigungsbefehle gesendet.
 
 ## Installation
 
@@ -11,6 +11,17 @@ Die Integration läuft direkt in Home Assistant OS, ohne zusätzlichen Container
 3. Roberto Zones installieren und Home Assistant Core neu starten.
 4. Einstellungen → Geräte & Dienste → Integration hinzufügen → Roberto Zones (Diagnose).
 5. Live-Kartenentität (beispielsweise `image.wohnzimmer_roberto_blanko_live_map`) und lokale Xiaomi-Miio-`vacuum`-Entität eintragen.
+
+## Testfahrt ohne normalen Saugmodus (neu in 0.3.0)
+
+1. Roberto auf eine **freie Bodenfläche** stellen; direkt daneben bleiben. Keine Kabel, Katzenutensilien oder Hindernisse in Reichweite.
+2. Einstellungen → Werkzeuge → Aktionen → `roberto_zones.test_move_step`.
+3. Richtung wählen (Vorwärts, Rückwärts, Links, Rechts).
+4. Bei jeder Bewegung **Aufsicht und freie Fläche** bestätigen.
+5. Aktion ausführen. Es wird nur ein kurzer Fernsteuerungsschritt ausgeführt; die Miio-Aktion hält am Ende automatisch an. Drei Sekunden Abstand zwischen Schritten.
+6. Bei Problemen `roberto_zones.stop_test_drive` oder die physische Stopptaste verwenden.
+
+Die Funktion akzeptiert ausschließlich die konfigurierte `xiaomi_miio`-Staubsaugerentität, und nur bei `idle` oder `docked`. Dies ist kein freier Kartenpunkt-Navigationsmodus und **keine No-Go-Zonen-Absicherung**. Auch bei ausgeschalteter Turbine können Räder/Bürsten Kabel erfassen. Remote-Control-Befehle brauchen ggf. einen Roboter außerhalb der Ladestation.
 
 ## Historisches Kartenbild direkt hochladen (neu in 0.2.0)
 

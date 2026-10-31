@@ -1,4 +1,4 @@
-"""Roberto Zones 0.1: event-driven, read-only map diagnostics."""
+"""Roberto Zones: event-driven diagnostics and supervised step tests."""
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +26,7 @@ from .const import (
 )
 from .matcher import compare
 from .reference_image import prepare_reference_image, MAX_INPUT_BYTES
+from .manual_test import SupervisedDrive, TEST_STEPS
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR]
@@ -51,6 +52,7 @@ class RobertoController:
         self._last_run_monotonic = 0.0
         self._closed = False
         self._reference = Path(hass.config.path("roberto_zones", "reference.png"))
+        self.drive = SupervisedDrive(hass, self)
 
     @property
     def map_entity(self):
@@ -296,6 +298,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def import_reference(call):
         await controller.async_import_reference(call.data["image"])
 
+    async def test_move_step(call):
+        await controller.drive.async_move_step(
+            call.data["direction"], call.data["supervised"]
+        )
+
+    async def stop_test_drive(_call):
+        await controller.drive.async_stop()
+
     hass.services.async_register(DOMAIN, SERVICE_ANALYZE, analyze_now)
     hass.services.async_register(DOMAIN, "capture_reference", capture_reference)
     hass.services.async_register(
@@ -304,6 +314,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         import_reference,
         schema=vol.Schema({vol.Required("image"): dict}),
     )
+    hass.services.async_register(
+        DOMAIN,
+        "test_move_step",
+        test_move_step,
+        schema=vol.Schema({
+            vol.Required("direction"): vol.In(tuple(TEST_STEPS)),
+            vol.Required("supervised"): vol.Equal(True),
+        }),
+    )
+    hass.services.async_register(DOMAIN, "stop_test_drive", stop_test_drive)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -320,4 +340,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_ANALYZE)
         hass.services.async_remove(DOMAIN, "capture_reference")
         hass.services.async_remove(DOMAIN, "import_reference")
+        hass.services.async_remove(DOMAIN, "test_move_step")
+        hass.services.async_remove(DOMAIN, "stop_test_drive")
     return success

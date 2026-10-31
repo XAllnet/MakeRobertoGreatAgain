@@ -1,10 +1,10 @@
 # MakeRobertoGreatAgain – Roberto Zones
 
-**Version 0.2.0** · Home Assistant custom integration · read-only map diagnostics
+**Version 0.3.0** · Home Assistant custom integration · event-driven map diagnostics and supervised manual step tests
 
 This project explores resource-efficient map alignment for the Xiaomi Mi Robot Vacuum V1 (`rockrobo.vacuum.v1`) in Home Assistant.
 
-**Safety:** This version NEVER sends vacuum commands. It does not enforce No-Go zones. Map orientation is only a candidate, not a validated navigation coordinate transform. Do not use its output to authorize unattended cleaning.
+**Safety:** This version sends no automatic vacuum commands. The only possible motion is an explicit, short remote-control step with per-step confirmation and idle-state checks. It does not enforce No-Go zones. Map orientation is only a candidate, not a validated navigation coordinate transform. Do not use its output to authorize unattended cleaning.
 
 ## Install via Home Assistant Marketplace (2026.11 beta or later)
 
@@ -22,6 +22,14 @@ Alternatively, when a **complete** current map is available, run action `roberto
 
 The image is processed only on relevant map state changes while cleaning, with throttling and debounce; the integration has no polling timer. Map analysis runs in Home Assistant's executor.
 
+## Supervised steering tests (0.3.0)
+
+In **Settings → Tools → Actions**, choose `roberto_zones.test_move_step`. Select a direction and explicitly confirm supervision and a fully clear floor. Each action triggers **one** small movement using `xiaomi_miio.vacuum_remote_control_move_step`; the Miio service enters remote-control mode, performs the step and stops. No fan speed or cleaning actions are issued. The robot must have the **local Xiaomi Miio** entity (domain `xiaomi_miio`) configured and be `idle` or `docked`. Test on a completely clear open floor under direct supervision.
+
+`roberto_zones.stop_test_drive` attempts `vacuum.stop` plus remote-control stop. If connection is lost, press the robot's physical stop button.
+
+**No map target navigation in this version.** A current screenshot cannot yet be trusted for navigation. The 7 no-go reference zones are not enforced and cables remain dangerous.
+
 ## Updates
 
 For this early version the Marketplace can install directly from the repository's default branch, even without a GitHub release. Later tagged releases can provide versioned update notifications. Home Assistant Core may need a restart after updating.
@@ -32,7 +40,7 @@ No apartment screenshots, cleaning history, coordinate lists, tokens or cloud cr
 
 ## Limitations
 
-This is an experimental proof of concept tested for Python syntax and offline map matching, not yet validated on the user's Home Assistant VM. The original Xiaomi V1 resets its map during new whole-house cleaning sessions. Image rotation alone cannot verify the robot's navigation coordinate system. External software cannot guarantee the robot will avoid cables; dangerous areas require physical protection.
+This is an experimental proof of concept not yet validated on the user's Home Assistant VM, not yet validated on the user's Home Assistant VM. The original Xiaomi V1 resets its map during new whole-house cleaning sessions. Image rotation alone cannot verify the robot's navigation coordinate system. External software cannot guarantee the robot will avoid cables; dangerous areas require physical protection.
 
 See [German notes](README_DE.md).
 

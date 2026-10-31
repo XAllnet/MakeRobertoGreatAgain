@@ -1,4 +1,4 @@
-"""Read-only diagnostic sensors for Roberto Zones."""
+"""Map diagnostic sensors and supervised drive status for Roberto Zones."""
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import callback
 
@@ -10,6 +10,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities([
         RobertoDiagnosticSensor(controller),
         RobertoOrientationSensor(controller),
+        RobertoTestDriveSensor(controller),
     ])
 
 
@@ -24,7 +25,7 @@ class _BaseSensor(SensorEntity):
             "identifiers": {(DOMAIN, "roberto_zones_diagnostic")},
             "name": "Roberto Zones",
             "manufacturer": "Eigenentwicklung (lokal)",
-            "model": "0.1 Diagnose – schreibgeschützt",
+            "model": "0.3 Diagnose und manuelle Testfahrt",
         }
 
     async def async_added_to_hass(self):
@@ -53,7 +54,9 @@ class RobertoDiagnosticSensor(_BaseSensor):
         d["last_analysis"] = self.controller.last_analysis
         d["automatic_zone_commands_enabled"] = False
         d["no_go_zones_enforced"] = False
-        d["read_only"] = True
+        d["read_only"] = False
+        d["automatic_drive_enabled"] = False
+        d["manual_step_only"] = True
         return d
 
 
@@ -70,3 +73,24 @@ class RobertoOrientationSensor(_BaseSensor):
     @property
     def extra_state_attributes(self):
         return {"verified_for_navigation": False}
+
+
+class RobertoTestDriveSensor(_BaseSensor):
+    _attr_name = "Manuelle Testfahrt"
+    _attr_icon = "mdi:robot-vacuum"
+    _attr_unique_id = "roberto_zones_manual_test_v1"
+
+    @property
+    def native_value(self):
+        return self.controller.drive.status
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "last_test": self.controller.drive.last_test,
+            "last_command": self.controller.drive.last_command,
+            "last_error": self.controller.drive.last_error,
+            "fan_cleaning_command_sent": False,
+            "no_go_zones_enforced": False,
+            "requires_supervision": True,
+        }
