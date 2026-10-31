@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Roberto Zones – Diagnose einrichten",
+        "description": "Nur Lesezugriff. Die lokale Xiaomi-Miio-Staubsauger-Entität auswählen (nicht die Cloud-Entität).",
+        "data": {
+          "map_entity": "Live-Karten-Entität (image.*)",
+          "vacuum_entity": "Lokale Miio-Staubsauger-Entität (vacuum.*)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Roberto Zones – Quellentitäten anpassen",
+        "data": {
+          "map_entity": "Live-Karten-Entität",
+          "vacuum_entity": "Lokale Staubsauger-Entität"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "domain": "roberto_zones",
+  "name": "Roberto Zones (Diagnose)",
+  "version": "0.1.1",
+  "config_flow": true,
+  "single_config_entry": true,
+  "dependencies": [
+    "image"
+  ],
+  "codeowners": [],
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "requirements": [],
+  "documentation": "https://github.com/XAllnet/MakeRobertoGreatAgain#readme",
+  "issue_tracker": "https://github.com/XAllnet/MakeRobertoGreatAgain/issues"
+}

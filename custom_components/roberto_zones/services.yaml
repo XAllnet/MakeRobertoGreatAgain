@@ -1,0 +1,6 @@
+analyze_now:
+  name: Karte jetzt untersuchen
+  description: Liest die vorhandene Karte einmalig aus und berechnet unverbindliche Orientierungskandidaten. Sendet keine Roboterbefehle.
+capture_reference:
+  name: Aktuelle Karte als lokale Referenz speichern
+  description: Speichert das aktuelle Kartenbild in /config/roberto_zones/reference.png. Nur bei vollständig erfasster Karte ausführen. Überschreibt die vorhandene Referenz.
