@@ -183,6 +183,13 @@ class RobertoController:
                 self.status = "kartenentitaet_nicht_gefunden"
                 self.details = {"map_entity": self.map_entity}
                 return
+            self.position = self._get_map_position(
+                self._position_entity, "vacuum_position", state
+            )
+            self.position_source = (
+                self._position_entity if self.position and self._position_entity
+                else ("legacy_image_attribute" if self.position else None)
+            )
             if not self._reference.is_file():
                 self.status = "referenz_fehlt"
                 self.details = {
@@ -195,6 +202,11 @@ class RobertoController:
             if not isinstance(calibration, list) or len(calibration) < 3:
                 calibration = None
             image = await async_get_image(self.hass, self.map_entity, timeout=12)
+            current_state = self.hass.states.get(self.map_entity)
+            if current_state is None or current_state.state != state.state:
+                self.status = "karte_waehrend_auslesen_aktualisiert"
+                self._schedule(DEBOUNCE_SECONDS)
+                return
             reference_bytes = await self.hass.async_add_executor_job(
                 self._reference.read_bytes
             )
@@ -289,6 +301,12 @@ class RobertoController:
         if state is None or state.state in ("unavailable", "unknown"):
             raise HomeAssistantError("Live-Karte ist nicht verfügbar")
         image = await async_get_image(self.hass, self.map_entity, timeout=12)
+        current_state = self.hass.states.get(self.map_entity)
+        if current_state is None or current_state.state != state.state:
+            raise HomeAssistantError(
+                "Die Live-Karte hat sich während der Aufnahme geändert. "
+                "Bitte erneut versuchen."
+            )
         raw = image.content
         if not raw or len(raw) > 10_000_000:
             raise HomeAssistantError("Kartendatei leer oder ungewöhnlich groß")
