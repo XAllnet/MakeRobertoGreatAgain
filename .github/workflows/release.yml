@@ -1,0 +1,73 @@
+name: Publish Roberto Zones release
+
+on:
+  workflow_run:
+    workflows: ["Validate Roberto Zones"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out verified main revision
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Verify tested revision and integration version
+        id: version
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_SHA="$(git rev-parse HEAD)"
+          if [ "$CURRENT_SHA" != "$VERIFIED_SHA" ]; then
+            echo "A newer untested main revision exists; skipping release."
+            exit 0
+          fi
+          VERSION="$(python -c 'import json; print(json.load(open("custom_components/roberto_zones/manifest.json"))["version"])')"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid semantic version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$CURRENT_SHA" >> "$GITHUB_OUTPUT"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Publish release if not yet present
+        if: steps.version.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_SHA: ${{ steps.version.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+            exit 0
+          fi
+          cat > release-notes.md <<'EOF'
+          ## Roberto Zones – Home Assistant
+
+          Install or update this integration in the Home Assistant Marketplace.
+          See the [German changelog and usage notes](https://github.com/XAllnet/MakeRobertoGreatAgain/blob/main/README_DE.md).
+
+          **Important:** Map registration and robot position are diagnostic estimates, not authorization for unattended movement or no-go zone enforcement. The Xiaomi V1 can run both brushes even during supervised driving tests.
+
+          After updating, restart Home Assistant Core.
+          EOF
+          gh release create "$TAG" --repo "$REPO" \
+            --target "$RELEASE_SHA" \
+            --title "Roberto Zones $TAG" \
+            --notes-file release-notes.md \
+            --latest
