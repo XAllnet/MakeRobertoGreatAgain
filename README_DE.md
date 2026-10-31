@@ -1,4 +1,4 @@
-# Roberto Zones 0.5.1 – Kartenüberlagerung und Positionsdiagnose
+# Roberto Zones 0.5.2 – Kartenüberlagerung und Positionsdiagnose
 
 Die Integration nutzt die vorhandene Home-Assistant-Installation mit dem Xiaomi Cloud Map Extractor **3.0 alpha** und dem lokalen Xiaomi Miio. Kein zusätzlicher Container und keine Firmwareänderung.
 
@@ -6,7 +6,7 @@ Die Integration nutzt die vorhandene Home-Assistant-Installation mit dem Xiaomi 
 
 ## 1. Aktualisieren
 
-Marketplace → Roberto Zones → Version 0.5.1 installieren → Home Assistant Core neu starten. Die Integration muss nicht gelöscht und neu angelegt werden.
+Marketplace → Roberto Zones → Version 0.5.2 installieren → Home Assistant Core neu starten. Die Integration muss nicht gelöscht und neu angelegt werden.
 
 ## 2. Positionssensoren des Map Extractors einschalten
 
@@ -59,7 +59,7 @@ Das ist jedoch **noch keine unabhängige physische Positionsbestätigung**: Kali
 
 Die Bildberechnung läuft nur auf Bild- oder Positionsänderungen mit Debounce/Throttling und außerhalb des Home-Assistant-Event-Loops. Kein zusätzlicher Polling-Prozess.
 
-## 6. Aktualisierungslatenz (0.5.1)
+## 6. Aktualisierungslatenz (0.5.2)
 
 Roberto Zones übernimmt neue X-/Y-Werte unmittelbar nach einem Event des Map-Extractor-Positionssensors; die langsame Kartenbildanalyse blockiert die Positionsanzeige nicht mehr. Die Kartenüberlagerung behält die mindestens 15 Sekunden Abstand plus Debounce bei.
 
@@ -67,7 +67,24 @@ Die Position zeigt die Attribute `source_entity_last_updated` (Home-Assistant-Ze
 
 **Nicht für laufende Lenkregelung, Kollisionsvermeidung oder laufende No-Go-Zonen-Korrektur benutzen.** Um einen Zielpunkt zu prüfen, Roberto anhalten lassen und anschließend auf ein stabiles Positionsupdate warten.
 
-## 7. Achtung
+## 7. Orientierung nach Karten-Neustart (0.5.2)
+
+**Warum die alte Darstellung falsch war:** Die Referenz- und Live-Karte wurden direkt über ihre Xiaomi-Kalibrierung übereinandergelegt. Nach einem Kartierungsreset kann sich aber das gesamte lokale Xiaomi-Koordinatensystem drehen. Zwei intern korrekt kalibrierte Karten sind deshalb nicht automatisch zueinander ausgerichtet.
+
+0.5.2 prüft nun nacheinander **0°, 90°, 180° und 270°**, außerdem kleine Versätze um den gemeldeten Ladepunkt (bis 300 mm als Diagnosesuche). Jeder Kandidat erhält eine Ähnlichkeitswertung. Das Bild zeigt die bestbewertete Drehung; bei zu wenig sichtbaren Wänden oder mehreren ähnlich guten Ergebnissen steht **UNBESTÄTIGT**. Die gemeldete Roboter- und Ladeposition werden zur Anzeige in denselben Referenzrahmen transformiert.
+
+Neue Diagnoseattribute unter **Kartenstatus**:
+- `rotation_candidate_degrees`: beste Bilddrehung zwischen zwei Xiaomi-Karten
+- `rotation_candidates`: Trefferwerte für alle untersuchten Vierteldrehungen
+- `rotation_score` und `rotation_score_gap`: Qualität und Abstand zum nächstbesten Kandidaten
+- `relative_shift_candidate_mm`: kleiner geschätzter Versatz
+- `anchor_assumed`: mindestens eine Dock-Position wurde nur angenommen; dann ist der Vergleich nicht eindeutig verankert
+
+Falls die **bestehende Referenz** schon in 0.5.0 gespeichert wurde, besitzt sie ggf. noch keine gespeicherte Dock-Koordinate. Du kannst eine neue vollständige Karte über `roberto_zones.capture_reference` speichern, sobald sie verfügbar ist. Das überschreibt die vorherige Referenz und speichert jetzt auch die zugehörige Dock-Position, sofern sie geliefert wird.
+
+**Wichtig:** Diese Rotation ist ein Bild- und Kartenabgleich, keine verifizierte Abbildung auf echte Navigationsziele. Der visuelle Kandidat darf niemals automatisch in `vacuum_goto` umgesetzt werden. Eine kleine Teilkarte kann trotz korrekter Anzeige mehrdeutig sein. Ein Test mit **zwei unabhängigen physischen Zielpunkten** bleibt erforderlich.
+
+## 8. Achtung
 
 Die Referenz ist **nur für Home Assistant**, nicht Robertos interne Karte. Der Xiaomi V1 beginnt normale Reinigungsläufe weiterhin ohne persistenten Grundriss. Er kann beliebige Wege zu Zielen wählen. Kabel/No-Go-Zonen lassen sich mit diesem Add-on bisher nicht zuverlässig schützen. Beim Bewegen können **Haupt- und Seitenbürsten mitlaufen**.
 

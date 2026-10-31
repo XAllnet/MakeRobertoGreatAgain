@@ -263,13 +263,15 @@ class RobertoController:
 
             def prepare_overlay():
                 reference_calibration = None
+                reference_charger = None
                 if self._reference_meta.is_file():
                     stored = json.loads(self._reference_meta.read_text(encoding="utf-8"))
                     if stored.get("sha256") == hashlib.sha256(reference_bytes).hexdigest():
                         reference_calibration = stored.get("calibration_points")
+                        reference_charger = stored.get("charger_position")
                 return build_overlay(
                     reference_bytes, image.content, reference_calibration,
-                    calibration, robot, charger,
+                    calibration, robot, charger, reference_charger,
                 )
 
             overlay, overlay_info = await self.hass.async_add_executor_job(
@@ -304,6 +306,8 @@ class RobertoController:
                 self.status = "live_kalibrierung_fehlt"
             elif not overlay_info.get("visual_alignment_candidate", False):
                 self.status = "ausrichtung_nicht_bestaetigt"
+            elif overlay_info.get("anchor_assumed", True):
+                self.status = "anker_nicht_bestaetigt"
             elif not robot:
                 self.status = "position_nicht_verfuegbar"
             else:
@@ -352,6 +356,10 @@ class RobertoController:
         if not raw or len(raw) > 10_000_000:
             raise HomeAssistantError("Kartendatei leer oder ungewöhnlich groß")
 
+        charger_position = self._get_map_position(
+            self._charger_entity, "charger", state
+        )
+
         def save() -> None:
             self._reference.parent.mkdir(parents=True, exist_ok=True)
             temp = self._reference.with_suffix(".tmp")
@@ -365,6 +373,7 @@ class RobertoController:
                 "sha256": hashlib.sha256(raw).hexdigest(),
                 "calibration_points": calibration if isinstance(calibration, list) else None,
                 "source": self.map_entity,
+                "charger_position": charger_position,
             }
             meta_tmp = self._reference_meta.with_suffix(".tmp")
             meta_tmp.write_text(json.dumps(values), encoding="utf-8")

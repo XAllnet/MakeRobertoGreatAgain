@@ -13,6 +13,8 @@ from collections.abc import Mapping
 import numpy as np
 from PIL import Image, ImageDraw, ImageOps
 
+from .registration import estimate_registration, warp_full
+
 MAX_IMAGE_PIXELS = 16_000_000
 MAX_EDGE = 1200
 
@@ -131,7 +133,7 @@ def _dot(draw, p, color, label=None, radius=7):
 
 
 def build_overlay(reference, live, reference_points=None, live_points=None,
-                  robot=None, charger=None):
+                  robot=None, charger=None, reference_charger=None):
     """Return PNG and always-conservative diagnostics.
 
     If historical reference lacks its own image->world calibration, generate
@@ -183,56 +185,80 @@ def build_overlay(reference, live, reference_points=None, live_points=None,
         result["overlay_mode"] = "side_by_side_not_registered"
         result["reason"] = "Referenz-Screenshot ohne Original-Kalibrierung" if ref_t is None else "Live-Kalibrierung fehlt"
     else:
-        transform = np.linalg.inv(live_t) @ ref_t
-        coeffs = (
-            float(transform[0, 0]), float(transform[0, 1]), float(transform[0, 2]),
-            float(transform[1, 0]), float(transform[1, 1]), float(transform[1, 2]),
+        alignment = estimate_registration(
+            refmask, livemask, ref_t, live_t,
+            reference_dock=reference_charger, live_dock=charger,
         )
-        aligned = Image.fromarray((livemask * 255).astype("uint8")).transform(
-            (refmask.shape[1], refmask.shape[0]),
-            Image.Transform.AFFINE, coeffs,
-            resample=Image.Resampling.NEAREST, fillcolor=0,
-        )
-        transformed_mask = np.asarray(aligned) > 127
-        n_live = int(transformed_mask.sum())
-        # Slight wall-edge tolerance, never used as physical clearance.
-        ref_dilated = np.asarray(
-            Image.fromarray((refmask * 255).astype("uint8")).filter(
-                __import__("PIL.ImageFilter", fromlist=["MaxFilter"]).MaxFilter(7)
+        result["registration_found"] = alignment["found"]
+        result["anchor_assumed"] = alignment.get("anchor_assumed", True)
+        result["rotation_candidates"] = alignment.get("candidates", [])
+        result["visual_alignment_candidate"] = False
+        if not alignment["found"]:
+            result["overlay_mode"] = "registration_not_found"
+            result["reason"] = alignment["reason"]
+            board = Image.new("RGB", (1050, 540), "#0d1b2a")
+            refimg = _fit_in(_floor_render(refmask, "#6b96b3"), (480, 470))
+            liveimg = _fit_in(_floor_render(livemask, "#61d2df"), (480, 470))
+            board.paste(refimg, (30+(480-refimg.width)//2, 42+(470-refimg.height)//2))
+            board.paste(liveimg, (555+(480-liveimg.width)//2, 42+(470-liveimg.height)//2))
+            ImageDraw.Draw(board).text(
+                (12, 10), "KEINE ZUVERLAESSIGE REGISTRIERUNG - ZWEI SEPARATE KARTEN",
+                fill="#ff9999",
             )
-        ) > 127
-        overlap = float((transformed_mask & ref_dilated).sum() / max(1, n_live))
-        result["observed_pixels"] = n_live
-        result["floor_overlap_ratio"] = round(overlap, 3)
-        result["visual_alignment_candidate"] = n_live >= 200 and overlap >= 0.75
-        # Absolute frame of reference in reference image coordinates.
-        canvas = _floor_render(refmask, "#567b91")
-        image_data = np.asarray(canvas).copy()
-        image_data[transformed_mask] = (85, 214, 225)
-        canvas = Image.fromarray(image_data, "RGB")
-        draw = ImageDraw.Draw(canvas)
-        inv_ref = np.linalg.inv(ref_t)
-        if robot:
-            px = inv_ref @ np.array([robot["x"], robot["y"], 1.])
-            if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
-                _dot(draw, (round(px[0]), round(px[1])), "#ffca65", "Roberto")
-        if charger:
-            px = inv_ref @ np.array([charger["x"], charger["y"], 1.])
-            if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
-                _dot(draw, (round(px[0]), round(px[1])), "#a4f49c", "Dock", radius=5)
-        canvas = _fit_in(canvas, (1000, 900))
-        board = Image.new("RGB", (1020, canvas.height+60), "#0d1b2a")
-        board.paste(canvas, ((1020-canvas.width)//2, 40))
-        ImageDraw.Draw(board).text(
-            (16, 13),
-            "REFERENZ: grau   LIVE: tuerkis   ROBOTER: gelb   (NUR DIAGNOSE)",
-            fill="#ffffff",
-        )
-        result["overlay_mode"] = "world_calibrated_preview"
-        if not result["visual_alignment_candidate"]:
-            result["reason"] = "Ueberlagerung geometrisch nicht bestaetigt"
         else:
-            result["reason"] = "Visuelle Ueberlagerung plausibel, physische Position ungeprueft"
+            result["rotation_candidate_degrees"] = alignment["rotation_degrees"]
+            result["relative_shift_candidate_mm"] = alignment["shift_mm"]
+            result["rotation_score"] = alignment["best_score"]
+            result["rotation_score_gap"] = alignment["score_gap"]
+            result["observed_pixels"] = alignment["observed_pixels"]
+            result["visual_alignment_candidate"] = alignment["candidate_distinct"]
+            result["physical_alignment_verified"] = False
+            result["coordinate_transform_approved"] = False
+            rotated = warp_full(
+                livemask, refmask.shape, alignment["ref_to_live_pixel"]
+            )
+            refimg = _floor_render(refmask, "#567b91")
+            image_data = np.asarray(refimg).copy()
+            image_data[rotated] = (85, 214, 225)
+            canvas = Image.fromarray(image_data, "RGB")
+            pen = ImageDraw.Draw(canvas)
+            inv_ref = np.linalg.inv(ref_t)
+            mapping = alignment["world_live_to_ref"]
+            if robot:
+                source = np.array([robot["x"], robot["y"], 1.])
+                px = inv_ref @ mapping @ source
+                if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
+                    _dot(pen, (round(px[0]), round(px[1])), "#ffca65", "Roberto")
+            if charger:
+                px = inv_ref @ mapping @ np.array([
+                    charger["x"], charger["y"], 1.
+                ])
+                if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
+                    _dot(pen, (round(px[0]), round(px[1])), "#a4f49c", "Dock", radius=5)
+            canvas = _fit_in(canvas, (1000, 900))
+            board = Image.new("RGB", (1020, canvas.height + 65), "#0d1b2a")
+            board.paste(canvas, ((1020-canvas.width)//2, 54))
+            pen = ImageDraw.Draw(board)
+            certainty = "UNBESTAETIGT" if not alignment["candidate_distinct"] else "NUR KANDIDAT"
+            pen.text(
+                (14, 10),
+                f'{certainty}: gedreht {alignment["rotation_degrees"]} Grad; '
+                f'Score {alignment["best_score"]:.2f}, '
+                f'Abstand {alignment["score_gap"]:.2f}',
+                fill="#f5c768" if alignment["candidate_distinct"] else "#ff9b9b",
+            )
+            pen.text(
+                (14, 27),
+                "Grau: Referenz | Tuerkis: aktuelle Karte | KEINE FAHRFREIGABE",
+                fill="#c2d6de",
+            )
+            result["overlay_mode"] = "rotation_corrected_diagnostic"
+            result["reason"] = (
+                "Kartendrehung als Kandidat gefunden; "
+                "Dock und echte Zielpunkte extern pruefen"
+                if alignment["candidate_distinct"]
+                else "Orientierung unklar: Teilkarte oder mehrdeutiger Grundriss"
+            )
     buf = BytesIO()
     board.save(buf, format="PNG", optimize=True)
     return buf.getvalue(), result
