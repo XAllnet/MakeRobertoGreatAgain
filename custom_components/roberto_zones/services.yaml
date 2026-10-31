@@ -4,3 +4,16 @@ analyze_now:
 capture_reference:
   name: Aktuelle Karte als lokale Referenz speichern
   description: Speichert das aktuelle Kartenbild in /config/roberto_zones/reference.png. Nur bei vollständig erfasster Karte ausführen. Überschreibt die vorhandene Referenz.
+import_reference:
+  name: Historische Karte aus Datei importieren
+  description: Lädt ein altes Xiaomi-Kartenbild über die Home-Assistant-Weboberfläche hoch. Das Bild wird nur lokal als Referenz gespeichert, nie an den Roboter gesendet. Vorhandene Referenz wird überschrieben.
+  fields:
+    image:
+      name: Historische Wohnungskarte (PNG/JPG)
+      description: Über das Feld ein vollständiges Karten-Screenshot hochladen (max. 10 MB). Kein ZIP.
+      required: true
+      selector:
+        media:
+          accept:
+            - image/*
+          image_upload: true

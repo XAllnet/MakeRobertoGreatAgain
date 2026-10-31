@@ -1,6 +1,6 @@
 # MakeRobertoGreatAgain – Roberto Zones
 
-**Version 0.1.1** · Home Assistant custom integration · read-only map diagnostics
+**Version 0.2.0** · Home Assistant custom integration · read-only map diagnostics
 
 This project explores resource-efficient map alignment for the Xiaomi Mi Robot Vacuum V1 (`rockrobo.vacuum.v1`) in Home Assistant.
 
@@ -16,7 +16,9 @@ This project explores resource-efficient map alignment for the Xiaomi Mi Robot V
 6. Set the live image entity (for example `image.wohnzimmer_roberto_blanko_live_map`) and your **local Xiaomi Miio** vacuum entity.
 
 Until a reference is available the status is `referenz_fehlt`.
-When a **complete** current map is available, run action `roberto_zones.capture_reference` to store a private reference at `/config/roberto_zones/reference.png`. The action replaces an existing reference. To analyze immediately, run `roberto_zones.analyze_now`.
+**New in 0.2.0: import a historical map screenshot through the web UI.** Open **Settings → Tools → Actions**, select `roberto_zones.import_reference`, and upload a PNG/JPG via the image field. The image is held by Home Assistant's image-upload store and normalized into a private PNG reference at `/config/roberto_zones/reference.png`. It overwrites the old reference. A screenshot is not an original Xiaomi navigation map and does not provide trustworthy navigation coordinates.
+
+Alternatively, when a **complete** current map is available, run action `roberto_zones.capture_reference` to store a private reference at `/config/roberto_zones/reference.png`. The action replaces an existing reference. To analyze immediately, run `roberto_zones.analyze_now`.
 
 The image is processed only on relevant map state changes while cleaning, with throttling and debounce; the integration has no polling timer. Map analysis runs in Home Assistant's executor.
 

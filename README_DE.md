@@ -1,4 +1,4 @@
-# Roberto Zones 0.1.1 – Diagnose
+# Roberto Zones 0.2.0 – Diagnose
 
 Die Integration läuft direkt in Home Assistant OS, ohne zusätzlichen Container, ohne Root und ohne Valetudo.
 
@@ -11,6 +11,16 @@ Die Integration läuft direkt in Home Assistant OS, ohne zusätzlichen Container
 3. Roberto Zones installieren und Home Assistant Core neu starten.
 4. Einstellungen → Geräte & Dienste → Integration hinzufügen → Roberto Zones (Diagnose).
 5. Live-Kartenentität (beispielsweise `image.wohnzimmer_roberto_blanko_live_map`) und lokale Xiaomi-Miio-`vacuum`-Entität eintragen.
+
+## Historisches Kartenbild direkt hochladen (neu in 0.2.0)
+
+1. Einstellungen → Werkzeuge → Aktionen öffnen.
+2. `roberto_zones.import_reference` auswählen.
+3. Im Feld **Historische Wohnungskarte** einen vollständigen Screenshot aus der Xiaomi-Reinigungshistorie als JPG oder PNG hochladen (kein ZIP).
+4. **Aktion ausführen**. Die App-Oberfläche und der dunkelblaue Hintergrund werden bei typischen Xiaomi-Screenshots automatisch entfernt.
+5. Unter **Kartenstatus** prüfen, ob eine Diagnose ausgeführt wurde (`orientierung_unklar` ist bei einer unvollständigen Live-Karte normal).
+
+Die Datei verbleibt auf Home Assistant; der Bild-Upload erzeugt außerdem einen Eintrag in der integrierten Home-Assistant-Bildverwaltung. Nur die lokale Referenzdatei unter `/config/roberto_zones/reference.png` wird von Roberto Zones eingelesen. Achtung: Ein historischer Screenshot hat **keine verifizierten Roboterkoordinaten**.
 
 ## Referenzkarte
 

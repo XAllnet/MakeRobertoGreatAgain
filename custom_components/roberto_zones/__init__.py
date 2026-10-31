@@ -4,10 +4,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import voluptuous as vol
 from datetime import datetime
 from pathlib import Path
 
 from homeassistant.components.image import async_get_image
+from homeassistant.components.media_source import async_resolve_media, Unresolvable
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
@@ -23,6 +25,7 @@ from .const import (
     SERVICE_ANALYZE,
 )
 from .matcher import compare
+from .reference_image import prepare_reference_image, MAX_INPUT_BYTES
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR]
@@ -215,6 +218,54 @@ class RobertoController:
         self._notify()
         await self.async_analyze()
 
+    async def async_import_reference(self, selected_media: dict) -> None:
+        """Import a historical screenshot using Home Assistant image upload."""
+        if self._closed or self._running:
+            raise HomeAssistantError("Roberto Zones ist beschäftigt oder nicht aktiv")
+        media_id = selected_media.get("media_content_id")
+        if not isinstance(media_id, str) or not media_id.startswith(
+            "media-source://image_upload/"
+        ) or len(media_id) > 256:
+            raise HomeAssistantError(
+                "Bitte über das Bild-Upload-Feld eine PNG/JPG-Datei auswählen"
+            )
+        try:
+            media = await async_resolve_media(
+                self.hass, media_id, target_media_player=None
+            )
+        except (Unresolvable, ValueError, KeyError) as exc:
+            raise HomeAssistantError("Das hochgeladene Bild ist nicht verfügbar") from exc
+        if media.path is None:
+            raise HomeAssistantError("Die ausgewählte Datei liegt nicht lokal")
+
+        def read_prepare_and_write() -> dict:
+            path = Path(media.path)
+            if path.stat().st_size > MAX_INPUT_BYTES:
+                raise ValueError("Bild ist größer als 10 MB")
+            image_bytes, metadata = prepare_reference_image(path.read_bytes())
+            self._reference.parent.mkdir(parents=True, exist_ok=True)
+            temp = self._reference.with_suffix(".tmp")
+            temp.write_bytes(image_bytes)
+            temp.replace(self._reference)
+            return metadata
+
+        try:
+            metadata = await self.hass.async_add_executor_job(read_prepare_and_write)
+        except (OSError, ValueError) as exc:
+            raise HomeAssistantError(f"Referenzimport fehlgeschlagen: {exc}") from exc
+        self.rotation = None
+        self.details = {
+            "import_method": metadata["method"],
+            "reference_width": metadata["width"],
+            "reference_height": metadata["height"],
+            "reference_file_local": "roberto_zones/reference.png",
+            "navigation_coordinates_verified": False,
+            "warning": "Historischer Screenshot, keine Roboterkoordinaten",
+        }
+        self.status = "historische_referenz_importiert"
+        self._notify()
+        await self.async_analyze()
+
     async def async_stop(self) -> None:
         self._closed = True
         if self._cancel_debounce is not None:
@@ -242,8 +293,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def capture_reference(_call):
         await controller.async_capture_reference()
 
+    async def import_reference(call):
+        await controller.async_import_reference(call.data["image"])
+
     hass.services.async_register(DOMAIN, SERVICE_ANALYZE, analyze_now)
     hass.services.async_register(DOMAIN, "capture_reference", capture_reference)
+    hass.services.async_register(
+        DOMAIN,
+        "import_reference",
+        import_reference,
+        schema=vol.Schema({vol.Required("image"): dict}),
+    )
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -259,4 +319,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await controller.async_stop()
         hass.services.async_remove(DOMAIN, SERVICE_ANALYZE)
         hass.services.async_remove(DOMAIN, "capture_reference")
+        hass.services.async_remove(DOMAIN, "import_reference")
     return success
