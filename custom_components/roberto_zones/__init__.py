@@ -426,7 +426,12 @@ class RobertoController:
             or cache.map_image != image_bytes
         ):
             return None
-        return getattr(cache, "map_data", None)
+        if (
+            not isinstance(getattr(cache, "map_data_raw", None), bytes)
+            or getattr(cache, "map_data", None) is None
+        ):
+            return None
+        return cache
 
     @callback
     def _geometry_unavailable(self, code: str, explanation: str):
@@ -476,17 +481,20 @@ class RobertoController:
                 self.status = "karte_waehrend_auslesen_aktualisiert"
                 self._schedule(DEBOUNCE_SECONDS)
                 return
-            map_data = self._cached_native_map(image.content)
-            if map_data is None:
+            cached = self._cached_native_map(image.content)
+            if cached is None:
                 self._geometry_unavailable(
                     "native_geometrie_nicht_verfuegbar",
                     "Kein synchroner v3-Map-Extractor-Cache; keine Pixelbild-Heuristik als Ersatz",
                 )
                 return
+            raw_map_snapshot = bytes(cached.map_data_raw)
+            map_data_snapshot = cached.map_data
             try:
                 live_geometry, live_calibration, geometry_diag = (
                     await self.hass.async_add_executor_job(
-                        extract_native_geometry, map_data, calibration,
+                        extract_native_geometry, raw_map_snapshot,
+                        map_data_snapshot, calibration,
                     )
                 )
             except ValueError as err:
@@ -498,7 +506,7 @@ class RobertoController:
                 self._geometry_unavailable(
                     "referenz_geometrie_fehlt",
                     "Einmalige neue vollständige Referenz nötig: "
-                    "roberto_zones.capture_reference (Version 0.6.2)",
+                    "roberto_zones.capture_reference (Version 0.6.3)",
                 )
                 return
 
@@ -514,7 +522,7 @@ class RobertoController:
                 reference_original = self._reference.read_bytes()
                 stored = json.loads(self._geometry_meta.read_text(encoding="utf-8"))
                 if (
-                    stored.get("schema") != 2
+                    stored.get("schema") != 3
                     or stored.get("rendered_sha256") != hashlib.sha256(reference_original).hexdigest()
                     or stored.get("geometry_sha256") != hashlib.sha256(reference_geometry).hexdigest()
                 ):
@@ -543,7 +551,11 @@ class RobertoController:
             )
             # The native geometry and rendered image represent one cached
             # map revision. Never use them if the coordinator has since moved.
-            if self._cached_native_map(image.content) is not map_data:
+            if (
+                self._cached_native_map(image.content) is not cached
+                or cached.map_data_raw != raw_map_snapshot
+                or cached.map_data is not map_data_snapshot
+            ):
                 self._geometry_unavailable(
                     "karte_waehrend_auslesen_aktualisiert",
                     "Quellkarte wurde während der Berechnung ersetzt",
@@ -662,23 +674,30 @@ class RobertoController:
             raise HomeAssistantError("Kartendatei leer oder ungewöhnlich groß")
 
         calibration = state.attributes.get("calibration_points")
-        map_data = self._cached_native_map(raw)
-        if map_data is None:
+        cached = self._cached_native_map(raw)
+        if cached is None:
             raise HomeAssistantError(
                 "Die native Geometrie aus dem Map-Extractor-Cache fehlt; "
                 "Referenz wurde nicht überschrieben."
             )
+        raw_map_snapshot = bytes(cached.map_data_raw)
+        map_data_snapshot = cached.map_data
         try:
             native_bytes, native_calibration, native_info = (
                 await self.hass.async_add_executor_job(
-                    extract_native_geometry, map_data, calibration
+                    extract_native_geometry, raw_map_snapshot,
+                    map_data_snapshot, calibration
                 )
             )
         except ValueError as err:
             raise HomeAssistantError(
                 f"Native Referenzgeometrie kann nicht erfasst werden: {err}"
             ) from err
-        if self._cached_native_map(raw) is not map_data:
+        if (
+            self._cached_native_map(raw) is not cached
+            or cached.map_data_raw != raw_map_snapshot
+            or cached.map_data is not map_data_snapshot
+        ):
             raise HomeAssistantError(
                 "Karte während der Aufnahme aktualisiert; bitte erneut versuchen"
             )
@@ -708,12 +727,12 @@ class RobertoController:
             geometry_tmp.write_bytes(native_bytes)
             geometry_tmp.replace(self._geometry_reference)
             geometry_metadata = {
-                "schema": 2,
+                "schema": 3,
                 "rendered_sha256": hashlib.sha256(raw).hexdigest(),
                 "geometry_sha256": native_info["geometry_sha256"],
                 "geometry_calibration": native_calibration,
                 "charger_position": charger_position,
-                "source": "shared_map_extractor_native_cache",
+                "source": "cached_roborock_raw_image_block",
                 "contains_robot_path": False,
                 "contains_robot_marker": False,
             }

@@ -1,19 +1,24 @@
-# MakeRobertoGreatAgain — Roberto Zones 0.6.2
+# MakeRobertoGreatAgain — Roberto Zones v0.6.3
 
-Home Assistant custom integration for Xiaomi Mi Robot Vacuum V1, with read-only map comparison and manually supervised, explicitly requested testing actions. **No automatic navigation and no enforced no-go zones.**
+Experimental Home Assistant integration for the Xiaomi Mi Robot Vacuum V1. Its diagnostic map matching is **read-only**, and it does not enforce no-go zones or authorize automatic navigation.
 
-### Geometry-only map comparison (v0.6.2)
+## Correct raw map geometry, no path contamination
 
-Previously, map alignment considered all contrasting pixels in rendered Map Extractor PNG images, including robot tracks and position icons. This made similarity and consensus dependent on the robot's route.
+**Regression corrected:** 0.6.2 mistakenly treated \`MapData.image.data\` as a clean geometry source. The Roborock parser calls \`ImageGenerator.draw_map()\` before publishing that object, so route, vacuum marker, charger and overlays were already present.
 
-Version 0.6.2 accesses **existing, already-fetched parsed map data** from the Xiaomi Cloud Map Extractor v3.0.0-alpha-24 coordinator cache, specifically \`MapData.image.data\`. This raster contains the underlying wall/floor pixels before the map renderer applies the path, vacuum marker and other transient overlays. Geometry is assigned its own map pixel calibration, then compared for rotation/translation.
+0.6.3 uses the **original Roborock type-2 IMAGE block** from the existing Map Extractor coordinator's \`map_data_raw\` Gzip blob, rather than the decorated PNG. It ignores the separate type-3 PATH block and other transient blocks entirely. The diagnostic mask includes only occupied wall/obstacle cells; free, scan and room cells are excluded. A bounded Gzip decoder and strict metadata/dimension checks fail closed on unexpected data.
 
-The previous reference is not silently reused: save a **complete current map** again with \`roberto_zones.capture_reference\`. This also resets any reference-landmark checkpoints tied to the old reference. The integration saves a private \`reference_geometry.png\` with SHA256-bound \`reference_geometry.json\` locally on Home Assistant. The original \`reference.png\` is retained.
+The saved reference geometry schema is now 3. **After upgrading, capture a new complete reference** with \`roberto_zones.capture_reference\`. Existing historical checkpoint baselines are invalidated when capturing a new reference.
 
-The Map Extractor v3 cache is a *private, version-dependent API*. If unavailable or its map PNG does not match the image entity data, the integration fails closed with \`native_geometrie_nicht_verfuegbar\`, without a second cloud request or fallback to decorated-image matching.
+Expected diagnostic attributes:
 
-The card \`image.wohnzimmer_roberto_blanko_live_map\` and user's Xiaomi Vacuum Map Card remain unchanged. The new diagnostic image presents geometry-only floor plans, with the old orientation-consensus gates. A visually aligned map is **not physical coordinate verification**. Manual checkpoint verification from 0.6.0 is still required.
+\`\`\`yaml
+geometry_source: cached_roborock_raw_image_block
+geometry_only: true
+tracks_included: false
+scan_floor_included: false
+\`\`\`
 
-The map extractor's 10-second cloud update delay remains. No permanent polling or new containers.
+Registration candidates and three-distinct-geometry-update stability checks remain diagnostic; they do not prove navigation coordinates or route safety. No new network traffic, container, timer or robot command is introduced. Your existing Xiaomi Vacuum Map Card remains the sole live-map controller.
 
-See [README_DE.md](README_DE.md) for full steps.
+See [README_DE.md](README_DE.md) for German installation and testing instructions.
