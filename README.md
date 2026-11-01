@@ -1,45 +1,24 @@
-# MakeRobertoGreatAgain – Roberto Zones
+# MakeRobertoGreatAgain — Roberto Zones
 
-## Version 0.5.2: local read-only world map diagnostics
+## 0.6.0: operator-confirmed coordinate verification
 
-Home Assistant custom integration for the Xiaomi Mi Robot Vacuum V1 (rockrobo.vacuum.v1). Runs inside Home Assistant Core without an additional VM, container or modified firmware.
+This is an experimental Home Assistant custom integration for Xiaomi Mi Robot Vacuum V1. The map overlay and position sensors remain diagnostic. **No automatic robot navigation, no enforced no-go zones, and no new vacuum commands** were added in 0.6.0. The existing supervised manual-test services remain available.
 
-**Experimental. No automatic navigation, no software-enforced no-go zones, no physical safety certification.** The existing manual short-step test services are unchanged.
+### Installation
 
-### Install/update
+Install the latest tagged release from https://github.com/XAllnet/MakeRobertoGreatAgain through Home Assistant Marketplace. Restart Home Assistant Core.
 
-Add https://github.com/XAllnet/MakeRobertoGreatAgain as a custom **Integration** repository in the Home Assistant 2026.11 Marketplace. Update Roberto Zones to 0.5.2 and restart Home Assistant.
+### Workflow
 
-### Position / charger
+1. Use a **complete native live map**, not an AI-drawn image or historical screenshot. Enable the Xiaomi Cloud Map Extractor's optional \`vacuum_position\` and \`charger_position\` sensors.
+2. Run \`roberto_zones.capture_reference\`. This also resets any older landmark baseline because it is bound to the exact reference image hash.
+3. On that same reference map, physically visit at least three well-separated, non-collinear landmarks using your **existing** live Xiaomi Vacuum Map Card. At each landmark, wait until stopped, run \`roberto_zones.record_reference_point\` with the unique name and physical confirmation. Repeat the same action at least 8 seconds later after a **new** position-source report. Names persist only in Home Assistant's private \`/config/roberto_zones/checkpoints.json\`.
+4. After a **new map run**, first establish a unique, dock-anchored image registration. Run \`roberto_zones.begin_verification\`.
+5. Visit the same physical landmarks using your existing live-map controls. At each point, run \`roberto_zones.verify_checkpoint\` twice (new report required) with an independent physical confirmation.
+6. Read **Koordinatenprüfung** sensor, residuals and reasons. All three landmarks must match within 250 mm; sampled stationary position must drift <=120 mm and map source reports must be fresh.
 
-The Xiaomi Cloud Map Extractor v3 alpha exposes two diagnostic sensors, \`vacuum_position\` and \`charger_position\`, typically disabled in the entity registry. Enable them in Settings → Devices & services → Xiaomi Cloud Map Extractor → Entities. Roberto Zones auto-detects sensors associated with the **same map-extractor config entry** as your configured live image entity; if necessary set explicit \`position_entity\` and \`charger_entity\` under Roberto Zones Configure/Options.
+On map reset, a changed image orientation, ambiguous map contours, unavailable dock calibration, stale coordinates, or a mismatch, results are invalidated or blocked. Source timestamps are Home Assistant update timestamps and may not reflect robot measurement latency.
 
-Positions come from the *reported Xiaomi map* and are **not independently verified physical positions**. Null/unknown means no position fix.
+A passed diagnostic **never** calls \`vacuum_goto\` and never permits unattended travel or software-enforced no-go zones. A correct destination does not prove a collision-free route.
 
-### Reference/live overlay
-
-The \`image\` entity **Referenz und Live-Karte** displays:
-- A **side-by-side**, explicitly *unaligned*, comparison if the reference came from a historical Xiaomi app screenshot with no image-to-world calibration.
-- A world-calibrated overlay when the reference and current map both have valid Xiaomi calibration points.
-
-To create a world-calibrated reference, first let Roberto build a **complete map**. Then run \`roberto_zones.capture_reference\` from Settings → Tools → Actions. It saves original map bytes and matching \`calibration_points\` (with SHA256 binding) *locally* in \`/config/roberto_zones/\`. A historical screenshot can be uploaded with \`roberto_zones.import_reference\`, but that discards any prior calibration to prevent mismatched transforms.
-
-Gray = saved reference, turquoise = freshly scanned floor; yellow = reported robot, green = reported dock. Overlap is a **visual plausibility indicator** and is never enough to authorize unattended travel. Image and sensor data originate from the same map extractor and do not independently confirm absolute physical location.
-
-### Proving coordinates before navigation
-
-The Xiaomi dock is approximately at (25500,25500) in native vacuum coordinates. First check the reported location when docked. Then manually test two widely separated safe checkpoints in different directions, verify the robot's **physical presence** there, and compare to the reported \`vacuum_position\` and transformed image pixels. If any source is missing, inconsistent, or stale, **fail closed**. No calculated target is sent by this version.
-
-More detailed instructions: [README_DE.md](README_DE.md).
-
-### Privacy and runtime
-
-The reference image and calibration remain inside Home Assistant and are not part of this public GitHub repository. The integration only reacts to relevant state changes, throttles work, and uses Home Assistant's executor for image processing.
-
-### Update in 0.5.2: low-latency position forwarding
-
-The map-extractor position sensor is now forwarded directly to the Roberto Zones position sensor on every source state/attribute change, independent of the expensive 15s-throttled image overlay. Attributes show HA entity update timestamps, which are **not robot-measurement timestamps**. The visual map marker may be older than the direct position sensor. Cloud latency remains; this is not suitable for continuous motor control or unattended no-go enforcement.
-
-### 0.5.2: map resets may rotate native coordinates
-
-Instead of assuming reference and live Xiaomi-map coordinates share the same orientation, read-only registration now tests rotations 0/90/180/270 degrees around the saved/live charger anchor, plus small translations up to 300 mm. The best match is shown as a **candidate** with per-rotation scores and ambiguity indicators; uncalibrated historical screenshots remain side by side. The displayed robot marker is transformed for the preview. A confirmed image similarity is *never* permission to send a robot destination. Map data source lag and partial-map ambiguity remain.
+See [README_DE.md](README_DE.md) for the complete German procedure and current dashboard card YAML.

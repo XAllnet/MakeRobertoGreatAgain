@@ -1,91 +1,58 @@
-# Roberto Zones 0.5.2 – Kartenüberlagerung und Positionsdiagnose
+# Roberto Zones 0.6.0 – Manuelle, unabhängige Koordinatenprüfung
 
-Die Integration nutzt die vorhandene Home-Assistant-Installation mit dem Xiaomi Cloud Map Extractor **3.0 alpha** und dem lokalen Xiaomi Miio. Kein zusätzlicher Container und keine Firmwareänderung.
+**Kein Roboterbefehl wurde hinzugefügt.** Roberto wird weiterhin über die bereits vorhandene Xiaomi Vacuum Map Card gesteuert. Diese Version speichert Kontrollpunkte und prüft Positionsmeldungen nach einem Kartenreset. Alle Daten bleiben in Home Assistant.
 
-**Keine automatische Punktnavigation und keine verlässlichen No-Go-Zonen.** Die bisherige beaufsichtigte Schrittsteuerung bleibt erhalten. Die in diesem Update erzeugte Überlagerung ist eine Diagnose, **keine Freigabe für Bewegungen**.
+## Einmalige Vorbereitung auf einer vollständigen Karte
 
-## 1. Aktualisieren
+1. Am besten eine **vollständige Live-Karte** von Roberto erstellen lassen. Map-Extractor-Sensoren \`vacuum_position\` und \`charger_position\` aktivieren.
+2. Die Aktion \`roberto_zones.capture_reference\` ausführen. Das ersetzt die frühere Referenz und sichert ihre Kalibrierung samt Dockposition. **Alle alten Referenzprüfpunkte werden gelöscht**, weil sie an eine andere Referenz gebunden wären.
+3. Drei gut erreichbare, weit voneinander entfernte und **nicht auf einer Linie** liegende Orte auswählen, zum Beispiel \`wohnzimmer_mitte\`, \`flur_frei\`, \`kueche_frei\`. Physisch eindeutig wiedererkennbare Bodenstellen verwenden, nicht nur ähnliche Punkte in der Bildansicht.
+4. Roberto mit der bestehenden Live-Karten-Pin-Steuerung zum ersten Ort schicken, vollständig anhalten lassen, 10 Sekunden auf die Map-Extractor-Position warten.
+5. In Einstellungen → Werkzeuge → Aktionen \`roberto_zones.record_reference_point\` auswählen. Eindeutigen Namen eingeben, **physische Anwesenheit und Stillstand bestätigen** und einmal ausführen. Status \`referenz_messung_1_von_2\` bedeutet, dass eine erste Position gespeichert wurde.
+6. Nach mindestens 8 Sekunden **und einem neuen Positionsbericht des Map Extractors** dieselbe Aktion mit demselben Namen erneut ausführen. Roberto darf sich zwischen den beiden Messungen höchstens 120 mm bewegen. Die Messung darf nicht älter als 45 Sekunden sein.
+7. Mit zwei weiteren Orten wiederholen. Die Punkte werden ausschließlich lokal unter \`/config/roberto_zones/checkpoints.json\` gespeichert und mit dem Hash der Referenzkarte verknüpft.
 
-Marketplace → Roberto Zones → Version 0.5.2 installieren → Home Assistant Core neu starten. Die Integration muss nicht gelöscht und neu angelegt werden.
+## Nach einer neuen Kartierung
 
-## 2. Positionssensoren des Map Extractors einschalten
+1. Neue Reinigungs-/Kartierungssitzung starten. Alte Fahrfreigaben werden gesperrt. Roberto Zones muss die Ausrichtung wieder als eindeutig erkennen und sowohl Referenz- als auch Live-Dockposition kennen.
+2. \`roberto_zones.begin_verification\` aufrufen. Es wird **kein** Fahrbefehl verschickt.
+3. Den ersten früheren Bodenpunkt über die **aktuelle Live-Karte** ansteuern. Am exakt gleichen physischen Ort anhalten lassen.
+4. \`roberto_zones.verify_checkpoint\` mit dem gespeicherten Punktnamen zweimal ausführen, wiederum nach mindestens 8 Sekunden und mit neuem Positionsbericht. Vor jedem Klick Anwesenheit und Stillstand bestätigen.
+5. Die beiden anderen Punkte ebenso testen. Bei mehr als 250 mm Abweichung wird die Prüfung gesperrt.
 
-Der Xiaomi Cloud Map Extractor 3.0-alpha-24 erzeugt separate, normalerweise **deaktivierte** Diagnose-Sensoren:
+Unter Roberto Zones gibt es einen neuen Sensor **Koordinatenprüfung** mit den Referenzpunktnamen, gemessenen Abweichungen, Kalibrierdrehung, Prüfstatus und ggf. Sperrgrund.
 
-- **Vacuum position** (\`vacuum_position\`): aktuelle Position in Xiaomi-Koordinaten, falls die Karte diese Daten enthält
-- **Charger position** (\`charger_position\`): Ladestation, falls vorhanden
+## Was als bestanden gilt
 
-Einstellungen → Geräte & Dienste → Xiaomi Cloud Map Extractor → Entitäten; deaktivierte Entitäten einblenden, **Vacuum position** und **Charger position** aktivieren. Namen können je nach Übersetzung abweichen.
+- Referenz und aktuelle Karte besitzen passende **eigene** Xiaomi-Kalibrierungsdaten
+- Der Referenz-Dockpunkt und Live-Dockpunkt liegen als echte Messungen vor; angenommene 25500/25500-Anker genügen nicht
+- Eindeutige Rotation und genügend erkennbare Raumgeometrie
+- Drei räumlich verteilte physisch vom Benutzer bestätigte Orte
+- Für jeden Ort zwei neue, mindestens 8 Sekunden getrennte Sensorberichte mit maximal 120 mm Standortdrift
+- Höchstens 250 mm Positionsabweichung gegenüber der gespeicherten Referenz
 
-Roberto Zones versucht automatisch, beide Sensoren der **gleichen Map-Extractor-Integration wie die Live-Bildentität** zu erkennen. Wenn das nicht klappt: Einstellungen → Geräte & Dienste → Roberto Zones → **Konfigurieren** → Entitätsnamen in **position_entity** und **charger_entity** eintragen (z. B. \`sensor.wohnzimmer_roberto_blanko_vacuum_position\`). Den tatsächlich angezeigten Namen verwenden, nicht raten.
+Nach Erfolg lautet der Status \`pruefpunkte_bestanden\`. **Das ist ausschließlich eine bestätigte Koordinatendiagnose für den beobachteten Kartierungsdurchlauf, keine automatische Fahrfreigabe.** Bei neuer Reinigung, Kartenwechsel, veränderter Rotation oder widersprüchlichem Ergebnis wird die Prüfung ungültig. Ein nicht erkennbarer Kartenreset kann ohne robuste Kartenkennung nicht immer automatisch festgestellt werden. Deshalb bleibt automatische Navigation vollständig deaktiviert.
 
-Ein Wert \`unknown\`, \`unavailable\` oder \`null\` bedeutet **keine Positionsmessung**. Das kann vor oder kurz nach Kartierungsbeginn vorkommen.
+## Wichtige Grenzen
 
-## 3. Neue Bildentität: Referenz und Live-Karte
+Die Xiaomi-Positionsdaten kommen mit der beobachteten Cloud-/Map-Extractor-Verzögerung. Home Assistant kann die wirkliche Messzeit am Roboter nicht garantieren. Auch ein korrekt gemeldeter Ankunftspunkt sagt nichts über die Sicherheit der **Route** aus. Der Xiaomi V1 kann den gesamten Weg abweichend planen und seine Haupt- und Seitenbürsten mitlaufen lassen. Die sieben No-Go-Zonen sind nicht technisch erzwungen.
 
-Unter Roberto Zones gibt es die neue Bildentität **Referenz und Live-Karte**.
+Bei fehlender Kalibrierung, veralteten Messdaten, unklarer Kartendrehung, nicht gefundenem Dock oder unzureichender Anzahl/Verteilung der Prüfpunkte bleibt der Status gesperrt.
 
-**Fall A – Historischer Screenshot importiert:** Die Karte bleibt als Referenz sichtbar, aber wird **neben** der Live-Karte angezeigt. Historische Screenshots haben keine nachprüfbare Umrechnung zwischen Bildpunkten und Xiaomi-Koordinaten. Eine scheinbar ausgerichtete Überlagerung wäre irreführend. Status \`referenz_ohne_koordinaten\`.
+## Deine bestehende Xiaomi Vacuum Map Card bleibt unverändert
 
-**Fall B – Einmal eine vollständige Live-Karte mit Kalibrierung sichern:** Wenn Roberto einen vollständigen Grundriss erfasst hat, unter **Einstellungen → Werkzeuge → Aktionen** \`roberto_zones.capture_reference\` ausführen. Das speichert lokal:
-- \`/config/roberto_zones/reference.png\` – Originalbild der Live-Karte
-- \`/config/roberto_zones/reference_calibration.json\` – zu **genau diesem Bild** gehörige Kalibrierung (mit Hash-Prüfung)
+\`\`\`yaml
+type: custom:xiaomi-vacuum-map-card
+title: Roberto Blanko
+entity: vacuum.wohnzimmer_rockrobo_vacuum_v1
+map_source:
+  camera: image.wohnzimmer_roberto_blanko_live_map
+calibration_source:
+  camera: true
+map_modes:
+  - template: vacuum_clean_zone
+\`\`\`
 
-Die Referenz darf nicht während einer unvollständigen Reinigung erstellt werden und überschreibt eine vorherige Referenz! Bei späteren Reinigungsläufen wird das aktuelle Bild über die ursprünglich gespeicherte Karte projiziert, **wenn beide Xiaomi-Kalibrierungen plausibel sind**. Grau = historische Referenzfläche; türkis = aktuell erkannte Fläche; gelb = gemeldete Roboterposition; grün = gemeldete Ladestation.
+Ein zusätzlicher \`vacuum_goto\`-Kartenmodus kann verwendet werden, ist für Roberto Zones 0.6.0 selbst aber keine Voraussetzung.
 
-Eine neue importierte Screenshot-Referenz **entfernt die alte Kalibrierung**, damit niemals falsche Pixelkoordinaten mit einer anderen Karte verknüpft werden.
-
-## 4. Woher kennen wir Robertos Position?
-
-Nicht aus dem Bild geraten: Der Map Extractor liefert die aus Xiaomi-Kartendaten gewonnene \`vacuum_position\` (X und Y) über seinen separaten Diagnosesensor. Roberto Zones zeigt diese in **Roboterposition (Xiaomi-Koordinaten)** an, sofern vorhanden. \`calibration_points\` übersetzen Bildpixel in Xiaomi-Koordinaten. Der Dockpunkt liegt näherungsweise bei **(25500, 25500)**.
-
-Das ist jedoch **noch keine unabhängige physische Positionsbestätigung**: Kalibrierung und Position stammen aus derselben Quelle. Um die Zuordnung wirklich zu prüfen:
-
-1. Position am Dock ablesen und dokumentieren.
-2. Roberto **unter Aufsicht** über eine bereits funktionierende Navigationskarte zu einem eindeutig erkennbaren freien Ziel schicken (vorerst außerhalb von Roberto Zones).
-3. Beim Ankommen reale Position, Xiaomi-X/Y und Bildmarkierung vergleichen. Einen zweiten Test in einer **anderen Richtung** ausführen.
-4. Stimmt beides mit plausibler Abweichung überein, können wir in der nächsten Entwicklungsstufe gezielt kalibrierte Ziele freischalten.
-
-**Bei \`vacuum_position=null\`, fehlender Kalibrierung, wechselndem Dock, unklaren Teilkarten oder falschem Bildabgleich sind Koordinaten nicht freigegeben.**
-
-## 5. Diagnose-Status
-
-- \`referenz_fehlt\`: Noch keine Referenz
-- \`referenz_ohne_koordinaten\`: Importierter Screenshot ohne Kalibrierung; sichere Seiten-an-Seiten-Ansicht
-- \`live_kalibrierung_fehlt\`: Aktuelle Map-Extractor-Kalibrierung unvollständig
-- \`ausrichtung_nicht_bestaetigt\`: Referenz und Live-Karte passen geometrisch noch nicht ausreichend
-- \`position_nicht_verfuegbar\`: Keine aktuelle Xiaomi-Roboterposition geliefert
-- \`ueberlagerung_plausibel_pruefung_offen\`: Bildvergleich plausibel, aber Position **noch nicht unabhängig bestätigt**
-
-Die Bildberechnung läuft nur auf Bild- oder Positionsänderungen mit Debounce/Throttling und außerhalb des Home-Assistant-Event-Loops. Kein zusätzlicher Polling-Prozess.
-
-## 6. Aktualisierungslatenz (0.5.2)
-
-Roberto Zones übernimmt neue X-/Y-Werte unmittelbar nach einem Event des Map-Extractor-Positionssensors; die langsame Kartenbildanalyse blockiert die Positionsanzeige nicht mehr. Die Kartenüberlagerung behält die mindestens 15 Sekunden Abstand plus Debounce bei.
-
-Die Position zeigt die Attribute `source_entity_last_updated` (Home-Assistant-Zeitstempel des zuletzt geänderten Quellenzustands) und `received_by_roberto_zones_at`. Das ist **keine garantierte Messzeit am Roboter**; die Xiaomi Cloud kann die Messung bereits früher erstellt haben. Die auf der Karte eingezeichnete Position stammt aus dem letzten Bildvergleich und kann deshalb älter als der Positionssensor sein.
-
-**Nicht für laufende Lenkregelung, Kollisionsvermeidung oder laufende No-Go-Zonen-Korrektur benutzen.** Um einen Zielpunkt zu prüfen, Roberto anhalten lassen und anschließend auf ein stabiles Positionsupdate warten.
-
-## 7. Orientierung nach Karten-Neustart (0.5.2)
-
-**Warum die alte Darstellung falsch war:** Die Referenz- und Live-Karte wurden direkt über ihre Xiaomi-Kalibrierung übereinandergelegt. Nach einem Kartierungsreset kann sich aber das gesamte lokale Xiaomi-Koordinatensystem drehen. Zwei intern korrekt kalibrierte Karten sind deshalb nicht automatisch zueinander ausgerichtet.
-
-0.5.2 prüft nun nacheinander **0°, 90°, 180° und 270°**, außerdem kleine Versätze um den gemeldeten Ladepunkt (bis 300 mm als Diagnosesuche). Jeder Kandidat erhält eine Ähnlichkeitswertung. Das Bild zeigt die bestbewertete Drehung; bei zu wenig sichtbaren Wänden oder mehreren ähnlich guten Ergebnissen steht **UNBESTÄTIGT**. Die gemeldete Roboter- und Ladeposition werden zur Anzeige in denselben Referenzrahmen transformiert.
-
-Neue Diagnoseattribute unter **Kartenstatus**:
-- `rotation_candidate_degrees`: beste Bilddrehung zwischen zwei Xiaomi-Karten
-- `rotation_candidates`: Trefferwerte für alle untersuchten Vierteldrehungen
-- `rotation_score` und `rotation_score_gap`: Qualität und Abstand zum nächstbesten Kandidaten
-- `relative_shift_candidate_mm`: kleiner geschätzter Versatz
-- `anchor_assumed`: mindestens eine Dock-Position wurde nur angenommen; dann ist der Vergleich nicht eindeutig verankert
-
-Falls die **bestehende Referenz** schon in 0.5.0 gespeichert wurde, besitzt sie ggf. noch keine gespeicherte Dock-Koordinate. Du kannst eine neue vollständige Karte über `roberto_zones.capture_reference` speichern, sobald sie verfügbar ist. Das überschreibt die vorherige Referenz und speichert jetzt auch die zugehörige Dock-Position, sofern sie geliefert wird.
-
-**Wichtig:** Diese Rotation ist ein Bild- und Kartenabgleich, keine verifizierte Abbildung auf echte Navigationsziele. Der visuelle Kandidat darf niemals automatisch in `vacuum_goto` umgesetzt werden. Eine kleine Teilkarte kann trotz korrekter Anzeige mehrdeutig sein. Ein Test mit **zwei unabhängigen physischen Zielpunkten** bleibt erforderlich.
-
-## 8. Achtung
-
-Die Referenz ist **nur für Home Assistant**, nicht Robertos interne Karte. Der Xiaomi V1 beginnt normale Reinigungsläufe weiterhin ohne persistenten Grundriss. Er kann beliebige Wege zu Zielen wählen. Kabel/No-Go-Zonen lassen sich mit diesem Add-on bisher nicht zuverlässig schützen. Beim Bewegen können **Haupt- und Seitenbürsten mitlaufen**.
-
-Das Update ist experimentell und noch nicht im echten Home Assistant des Nutzers getestet.
+Die Integration wurde bisher nur anhand synthetischer Offline-Daten getestet. Kein Test auf deiner Home-Assistant-VM und keine garantierte No-Go-Zonen-Funktion.

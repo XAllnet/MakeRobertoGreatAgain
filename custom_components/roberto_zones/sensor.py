@@ -12,6 +12,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
         RobertoOrientationSensor(controller),
         RobertoTestDriveSensor(controller),
         RobertoPositionSensor(controller),
+        RobertoVerificationSensor(controller),
     ])
 
 
@@ -26,7 +27,7 @@ class _BaseSensor(SensorEntity):
             "identifiers": {(DOMAIN, "roberto_zones_diagnostic")},
             "name": "Roberto Zones",
             "manufacturer": "Eigenentwicklung (lokal)",
-            "model": "0.5.1 Positionsdiagnose und Kartenüberlagerung",
+            "model": "0.6.0 Kontrollpunkte und Kartenverifikation",
         }
 
     async def async_added_to_hass(self):
@@ -126,3 +127,17 @@ class RobertoPositionSensor(_BaseSensor):
             "physical_location_confirmed": False,
             "auto_navigation_enabled": False,
         }
+
+
+class RobertoVerificationSensor(_BaseSensor):
+    _attr_name = "Koordinatenprüfung"
+    _attr_icon = "mdi:map-check"
+    _attr_unique_id = "roberto_zones_verification_status_v1"
+
+    @property
+    def native_value(self):
+        return self.controller.verifier.status
+
+    @property
+    def extra_state_attributes(self):
+        return self.controller.verifier.info()

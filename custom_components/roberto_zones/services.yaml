@@ -44,3 +44,43 @@ test_move_step:
 stop_test_drive:
   name: Testfahrt stoppen
   description: Versucht Roberto sofort zu stoppen und die Fernsteuerung zu beenden. Bei einem Verbindungsproblem die physische Stopptaste verwenden.
+
+record_reference_point:
+  name: Referenzpunkt vor einem Kartenreset speichern
+  description: Nur nach vollständiger Kartenerfassung und capture_reference. Roberto über die vorhandene Live-Karte zum festen Ort fahren lassen, vollständig anhalten und zweimal mit neuem Positionsbericht bestätigen. Der Punkt bleibt privat in Home Assistant gespeichert.
+  fields:
+    name:
+      name: Wiedererkennbarer Ortsname
+      description: Zum Beispiel wohnzimmer_mitte; beim neuen Kartendurchlauf exakt denselben Punkt anfahren.
+      required: true
+      selector:
+        text: {}
+    physical_confirmation:
+      name: Ich habe Roberto am richtigen Ort gesehen und er steht still
+      required: true
+      selector:
+        boolean: {}
+begin_verification:
+  name: Koordinatenprüfung für neuen Kartendurchlauf beginnen
+  description: Nur nach einem echten Kartenreset. Referenzpunkte und eindeutige Dock-Ausrichtung sind erforderlich. Sendet keinen Fahrbefehl.
+  fields:
+    new_map_confirmed:
+      name: Ich bestätige, dass Roberto eine neue Karte erzeugt hat
+      required: true
+      selector:
+        boolean: {}
+verify_checkpoint:
+  name: Referenzpunkt im neuen Kartendurchlauf prüfen
+  description: Genau denselben realen Ort über die bisherige Live-Karte anfahren, anhalten, Ankunft vor Ort bestätigen und Aktion zweimal mit neuen Positionsmeldungen ausführen. Maximal 250 mm Abweichung.
+  fields:
+    name:
+      name: Gespeicherter Referenzpunkt
+      description: Exakter Name, zum Beispiel wohnzimmer_mitte
+      required: true
+      selector:
+        text: {}
+    physical_confirmation:
+      name: Ich habe Roberto am richtigen Ort gesehen und er steht still
+      required: true
+      selector:
+        boolean: {}

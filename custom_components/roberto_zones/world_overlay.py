@@ -207,6 +207,9 @@ def build_overlay(reference, live, reference_points=None, live_points=None,
             )
         else:
             result["rotation_candidate_degrees"] = alignment["rotation_degrees"]
+            result["candidate_transform_live_to_reference"] = (
+                alignment["world_live_to_ref"].tolist()
+            )
             result["relative_shift_candidate_mm"] = alignment["shift_mm"]
             result["rotation_score"] = alignment["best_score"]
             result["rotation_score_gap"] = alignment["score_gap"]

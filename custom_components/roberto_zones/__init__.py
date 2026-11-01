@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import voluptuous as vol
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from homeassistant.components.image import async_get_image
@@ -31,6 +31,7 @@ from .matcher import compare
 from .reference_image import prepare_reference_image, MAX_INPUT_BYTES
 from .world_overlay import build_overlay, parse_position
 from .manual_test import SupervisedDrive, TEST_STEPS
+from .verification import CheckpointSession, candidate_is_usable
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR, Platform.IMAGE]
@@ -66,6 +67,11 @@ class RobertoController:
         self._position_entity: str | None = None
         self._charger_entity: str | None = None
         self.drive = SupervisedDrive(hass, self)
+        self.verifier = CheckpointSession()
+        self._checkpoints_file = Path(
+            hass.config.path("roberto_zones", "checkpoints.json")
+        )
+        self._latest_overlay_info: dict = {}
 
     @property
     def map_entity(self):
@@ -97,6 +103,172 @@ class RobertoController:
         ]
         return sorted(candidates)[0] if candidates else None
 
+    async def async_load_checkpoints(self) -> None:
+        """Restore private reference landmarks only when SHA256 still matches."""
+        def load():
+            if not self._reference.is_file():
+                return None
+            current_hash = hashlib.sha256(self._reference.read_bytes()).hexdigest()
+            if not self._checkpoints_file.is_file():
+                return {"reference_hash": current_hash, "points": {}}
+            saved = json.loads(self._checkpoints_file.read_text(encoding="utf-8"))
+            if not isinstance(saved, dict) or saved.get("reference_hash") != current_hash:
+                return {"reference_hash": current_hash, "points": {}}
+            points = saved.get("points", {})
+            if not isinstance(points, dict):
+                return {"reference_hash": current_hash, "points": {}}
+            valid = {
+                name: {"name": name, "x": int(point["x"]), "y": int(point["y"])}
+                for name, point in points.items()
+                if isinstance(name, str) and isinstance(point, dict)
+                and len(name) <= 32 and name
+                and isinstance(point.get("x"), int) and isinstance(point.get("y"), int)
+                and 0 <= point["x"] <= 52000 and 0 <= point["y"] <= 52000
+            }
+            return {"reference_hash": current_hash, "points": valid}
+
+        try:
+            saved = await self.hass.async_add_executor_job(load)
+            if saved:
+                self.verifier.reference_hash = saved["reference_hash"]
+                self.verifier.reference_points = saved["points"]
+        except (OSError, ValueError, TypeError, KeyError) as err:
+            _LOGGER.warning("Could not restore Roberto checkpoint data: %s", err)
+
+    async def async_save_checkpoints(self) -> None:
+        """Atomic local-only metadata persistence; no geometry or tokens in GitHub."""
+        payload = {
+            "schema": 1,
+            "reference_hash": self.verifier.reference_hash,
+            "points": self.verifier.reference_points,
+        }
+
+        def save():
+            self._checkpoints_file.parent.mkdir(parents=True, exist_ok=True)
+            temp = self._checkpoints_file.with_suffix(".tmp")
+            temp.write_text(json.dumps(payload), encoding="utf-8")
+            temp.replace(self._checkpoints_file)
+
+        await self.hass.async_add_executor_job(save)
+
+    def _current_map_identity(self):
+        state = self.hass.states.get(self.map_entity)
+        if state is None:
+            return None
+        for field in ("map_id", "map_index", "map_name"):
+            value = state.attributes.get(field)
+            if isinstance(value, (str, int)) and value not in ("", "unknown"):
+                return f"{field}:{value}"
+        return None
+
+    def _sample_position(self, name: str):
+        """Collect source state + timestamps, not the throttled overlay marker."""
+        map_state = self.hass.states.get(self.map_entity)
+        self._refresh_position(map_state)
+        if self.position is None or not self.position_source:
+            raise HomeAssistantError("Roboterposition ist nicht verfügbar")
+        source = self.hass.states.get(self.position_source)
+        if source is None:
+            raise HomeAssistantError("Positionsquellen-Entität fehlt")
+        last_reported = getattr(source, "last_reported", None)
+        source_event_time = last_reported or source.last_updated
+        from .verification import MAX_SOURCE_AGE_S
+        try:
+            return self.verifier.snapshot(
+                name, self.position, source_event_time,
+                self.position_source,
+                datetime.now(timezone.utc)
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+
+    def _require_stopped(self):
+        vacuum = self.hass.states.get(self.vacuum_entity)
+        if vacuum is None or vacuum.state not in ("idle", "docked"):
+            raise HomeAssistantError(
+                "Vor jeder Messung vollständig anhalten. "
+                f"Roboterstatus: {vacuum.state if vacuum else 'nicht verfügbar'}"
+            )
+
+    @callback
+    def _require_point_name(self, name):
+        if not isinstance(name, str) or not (1 <= len(name) <= 32):
+            raise HomeAssistantError("Punktname muss 1–32 Zeichen haben")
+        if not all(c.isalnum() or c in ("_", "-") for c in name):
+            raise HomeAssistantError("Punktnamen nur mit Buchstaben, Zahlen, _ oder -")
+        return name
+
+    async def async_record_reference_point(self, name):
+        self._require_stopped()
+        name = self._require_point_name(name)
+        if not self.verifier.baseline_enabled:
+            raise HomeAssistantError(
+                "Referenzphase nicht aktiv. Erst vollständige Karte mit "
+                "roberto_zones.capture_reference sichern"
+            )
+        if not candidate_is_usable(self._latest_overlay_info):
+            raise HomeAssistantError("Referenz und Live-Karte sind nicht eindeutig ausgerichtet")
+        if (
+            self._latest_overlay_info.get("rotation_candidate_degrees") != 0
+            or sum(abs(v) for v in self._latest_overlay_info.get(
+                "relative_shift_candidate_mm", (999, 999)
+            )) > 150
+        ):
+            raise HomeAssistantError(
+                "Live-Karte entspricht nicht der gespeicherten Referenzphase"
+            )
+        stable = self._sample_position(name)
+        if stable is None:
+            self.verifier.status = "referenz_messung_1_von_2"
+            self._notify()
+            return
+        try:
+            self.verifier.store_reference_point(name, stable)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await self.async_save_checkpoints()
+        self._notify()
+
+    async def async_begin_verification(self, new_map_confirmed: bool):
+        if new_map_confirmed is not True:
+            raise HomeAssistantError("Neuen Kartierungsdurchlauf ausdrücklich bestätigen")
+        if not self._reference.is_file() or not self._reference_meta.is_file():
+            raise HomeAssistantError("Kalibrierte Originalreferenz fehlt")
+        try:
+            self.verifier.begin(
+                self._latest_overlay_info, self.run_count,
+                self._current_map_identity()
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        self._notify()
+
+    async def async_check_checkpoint(self, name):
+        name = self._require_point_name(name)
+        self._require_stopped()
+        self.verifier.check_map(
+            self._latest_overlay_info,
+            self.run_count,
+            self._current_map_identity()
+        )
+        if not self.verifier.active:
+            self._notify()
+            raise HomeAssistantError("Kartenzuordnung nicht mehr gültig; Prüfung gesperrt")
+        if name not in self.verifier.reference_points:
+            raise HomeAssistantError("Diesen Namen gibt es nicht als Referenzpunkt")
+        if name in self.verifier.results:
+            raise HomeAssistantError("Punkt wurde bereits geprüft")
+        stable = self._sample_position(name)
+        if stable is None:
+            self.verifier.status = "pruefmessung_1_von_2"
+            self._notify()
+            return
+        try:
+            self.verifier.verify_point(name, stable)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        self._notify()
+
     async def async_start(self) -> None:
         self._position_entity = self._source_entity("position_entity", "vacuum_position")
         self._charger_entity = self._source_entity("charger_entity", "charger_position")
@@ -123,6 +295,7 @@ class RobertoController:
             return
         if new.entity_id == self.vacuum_entity:
             if new.state == "cleaning" and (old is None or old.state != "cleaning"):
+                self.verifier.invalidate("neuer_reinigungsvorgang")
                 self.run_count += 1
                 self.status = "neuer_reinigungsvorgang"
                 self.rotation = None
@@ -280,6 +453,10 @@ class RobertoController:
             if not self._closed:
                 self.overlay_bytes = overlay
                 self.overlay_time = datetime.now().astimezone()
+            self._latest_overlay_info = overlay_info
+            self.verifier.check_map(
+                overlay_info, self.run_count, self._current_map_identity()
+            )
             self.details = {
                 **result,
                 **overlay_info,
@@ -380,6 +557,8 @@ class RobertoController:
             meta_tmp.replace(self._reference_meta)
 
         await self.hass.async_add_executor_job(save)
+        self.verifier.initialize_reference(hashlib.sha256(raw).hexdigest())
+        await self.async_save_checkpoints()
         self.status = "referenz_gespeichert"
         self.details = {
             "reference_file_local": "roberto_zones/reference.png",
@@ -425,6 +604,10 @@ class RobertoController:
             metadata = await self.hass.async_add_executor_job(read_prepare_and_write)
         except (OSError, ValueError) as exc:
             raise HomeAssistantError(f"Referenzimport fehlgeschlagen: {exc}") from exc
+        self.verifier.invalidate("referenz_ohne_kalibrierung_importiert")
+        self.verifier.reference_points.clear()
+        self.verifier.reference_hash = None
+        await self.async_save_checkpoints()
         self.rotation = None
         self.details = {
             "import_method": metadata["method"],
@@ -455,6 +638,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     controller = RobertoController(hass, entry)
+    await controller.async_load_checkpoints()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = controller
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await controller.async_start()
@@ -476,6 +660,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def stop_test_drive(_call):
         await controller.drive.async_stop()
 
+    async def record_reference_point(call):
+        await controller.async_record_reference_point(call.data["name"])
+
+    async def begin_verification(call):
+        await controller.async_begin_verification(call.data["new_map_confirmed"])
+
+    async def verify_checkpoint(call):
+        await controller.async_check_checkpoint(call.data["name"])
+
     hass.services.async_register(DOMAIN, SERVICE_ANALYZE, analyze_now)
     hass.services.async_register(DOMAIN, "capture_reference", capture_reference)
     hass.services.async_register(
@@ -494,6 +687,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }),
     )
     hass.services.async_register(DOMAIN, "stop_test_drive", stop_test_drive)
+    checkpoint_schema = vol.Schema({
+        vol.Required("name"): vol.All(str, vol.Length(min=1, max=32)),
+        vol.Required("physical_confirmation"): vol.Equal(True),
+    })
+    hass.services.async_register(
+        DOMAIN, "record_reference_point", record_reference_point,
+        schema=checkpoint_schema,
+    )
+    hass.services.async_register(
+        DOMAIN, "begin_verification", begin_verification,
+        schema=vol.Schema({
+            vol.Required("new_map_confirmed"): vol.Equal(True),
+        }),
+    )
+    hass.services.async_register(
+        DOMAIN, "verify_checkpoint", verify_checkpoint,
+        schema=checkpoint_schema,
+    )
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -512,4 +723,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, "import_reference")
         hass.services.async_remove(DOMAIN, "test_move_step")
         hass.services.async_remove(DOMAIN, "stop_test_drive")
+        hass.services.async_remove(DOMAIN, "record_reference_point")
+        hass.services.async_remove(DOMAIN, "begin_verification")
+        hass.services.async_remove(DOMAIN, "verify_checkpoint")
     return success
