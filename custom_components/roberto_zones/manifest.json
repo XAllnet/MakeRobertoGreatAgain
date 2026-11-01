@@ -1,7 +1,7 @@
 {
   "domain": "roberto_zones",
   "name": "Roberto Zones",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "config_flow": true,
   "single_config_entry": true,
   "dependencies": [

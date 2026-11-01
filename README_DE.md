@@ -1,45 +1,29 @@
-# Roberto Zones 0.6.0 – Manuelle, unabhängige Koordinatenprüfung
+# Roberto Zones 0.6.1 – Stabile Kartenregistrierung
 
-**Kein Roboterbefehl wurde hinzugefügt.** Roberto wird weiterhin über die bereits vorhandene Xiaomi Vacuum Map Card gesteuert. Diese Version speichert Kontrollpunkte und prüft Positionsmeldungen nach einem Kartenreset. Alle Daten bleiben in Home Assistant.
+Version 0.6.1 korrigiert das **Umspringen einer unbestätigten Kartenrotation**.
 
-## Einmalige Vorbereitung auf einer vollständigen Karte
+## Hintergrund
 
-1. Am besten eine **vollständige Live-Karte** von Roberto erstellen lassen. Map-Extractor-Sensoren \`vacuum_position\` und \`charger_position\` aktivieren.
-2. Die Aktion \`roberto_zones.capture_reference\` ausführen. Das ersetzt die frühere Referenz und sichert ihre Kalibrierung samt Dockposition. **Alle alten Referenzprüfpunkte werden gelöscht**, weil sie an eine andere Referenz gebunden wären.
-3. Drei gut erreichbare, weit voneinander entfernte und **nicht auf einer Linie** liegende Orte auswählen, zum Beispiel \`wohnzimmer_mitte\`, \`flur_frei\`, \`kueche_frei\`. Physisch eindeutig wiedererkennbare Bodenstellen verwenden, nicht nur ähnliche Punkte in der Bildansicht.
-4. Roberto mit der bestehenden Live-Karten-Pin-Steuerung zum ersten Ort schicken, vollständig anhalten lassen, 10 Sekunden auf die Map-Extractor-Position warten.
-5. In Einstellungen → Werkzeuge → Aktionen \`roberto_zones.record_reference_point\` auswählen. Eindeutigen Namen eingeben, **physische Anwesenheit und Stillstand bestätigen** und einmal ausführen. Status \`referenz_messung_1_von_2\` bedeutet, dass eine erste Position gespeichert wurde.
-6. Nach mindestens 8 Sekunden **und einem neuen Positionsbericht des Map Extractors** dieselbe Aktion mit demselben Namen erneut ausführen. Roberto darf sich zwischen den beiden Messungen höchstens 120 mm bewegen. Die Messung darf nicht älter als 45 Sekunden sein.
-7. Mit zwei weiteren Orten wiederholen. Die Punkte werden ausschließlich lokal unter \`/config/roberto_zones/checkpoints.json\` gespeichert und mit dem Hash der Referenzkarte verknüpft.
+Die bisherige Version zeigte immer die bestbewertete Drehung, auch wenn deren Punktzahl zu niedrig war oder die vier möglichen Ausrichtungen fast gleich abschnitten. So konnte eine zufällige Übereinstimmung für einen Moment als korrekt gedrehte Überlagerung erscheinen.
 
-## Nach einer neuen Kartierung
+Der alte Algorithmus belohnte außerdem fehlerhafte Zuordnungen, wenn ein Teil der aktuellen Karte außerhalb des Referenzbildes abgeschnitten wurde: Die Bewertung teilte lediglich durch die verbliebenen sichtbaren Pixel. Der neue Score berücksichtigt die **gesamte aktuell erkannte Kartenmaske**, begrenzt das zulässige Abschneiden und verwendet eine engere Konturtoleranz. Ein zweiter Suchschritt verfeinert die geschätzte Verschiebung in 50-mm-Schritten; das erhöht den Diagnoseaufwand in Maßen, ohne fortlaufendes Polling.
 
-1. Neue Reinigungs-/Kartierungssitzung starten. Alte Fahrfreigaben werden gesperrt. Roberto Zones muss die Ausrichtung wieder als eindeutig erkennen und sowohl Referenz- als auch Live-Dockposition kennen.
-2. \`roberto_zones.begin_verification\` aufrufen. Es wird **kein** Fahrbefehl verschickt.
-3. Den ersten früheren Bodenpunkt über die **aktuelle Live-Karte** ansteuern. Am exakt gleichen physischen Ort anhalten lassen.
-4. \`roberto_zones.verify_checkpoint\` mit dem gespeicherten Punktnamen zweimal ausführen, wiederum nach mindestens 8 Sekunden und mit neuem Positionsbericht. Vor jedem Klick Anwesenheit und Stillstand bestätigen.
-5. Die beiden anderen Punkte ebenso testen. Bei mehr als 250 mm Abweichung wird die Prüfung gesperrt.
+## Verhalten ab 0.6.1
 
-Unter Roberto Zones gibt es einen neuen Sensor **Koordinatenprüfung** mit den Referenzpunktnamen, gemessenen Abweichungen, Kalibrierdrehung, Prüfstatus und ggf. Sperrgrund.
+- Alle Vierteldrehungen (0/90/180/270°) werden weiterhin als Kandidaten bewertet.
+- **Ist die Drehung unklar, erscheint keine gedrehte Überlagerung.** Stattdessen: Referenz und aktuelle Karte nebeneinander mit sichtbarem Warnhinweis.
+- Ein plausibler Kandidat muss bei **mindestens drei unterschiedlichen Kartenmasken** dieselbe Rotation und einen ähnlichen Versatz (maximal 120 mm Änderung zwischen den Beobachtungen) liefern, ehe die Integration eine überlagerte Vorschau anzeigt.
+- Wiederholte Analysen derselben Karte zählen **nicht** mehrfach.
+- Widersprüchliche Drehungen, fragwürdige Scores oder ein Kartenreset löschen die temporäre visuelle Bestätigung.
+- Die Diagnosesensoren zeigen \`instant_visual_candidate\`, \`temporal_visual_match\`, \`consecutive_distinct_map_observations\`, \`rotation_score\`, \`rotation_score_gap\`, \`relative_shift_candidate_mm\` und \`anchor_assumed\`.
 
-## Was als bestanden gilt
+**Drei ähnliche Bilder bedeuten noch keinen physisch korrekten Standort.** Alle automatischen Navigationsbefehle und alle No-Go-Zonen bleiben gesperrt. Die Kontrollpunkt-Prüfung aus 0.6.0 bleibt der notwendige unabhängige zweite Schritt. Die bereits beobachtete Verzögerung von ca. 10 Sekunden des Map Extractors besteht weiter.
 
-- Referenz und aktuelle Karte besitzen passende **eigene** Xiaomi-Kalibrierungsdaten
-- Der Referenz-Dockpunkt und Live-Dockpunkt liegen als echte Messungen vor; angenommene 25500/25500-Anker genügen nicht
-- Eindeutige Rotation und genügend erkennbare Raumgeometrie
-- Drei räumlich verteilte physisch vom Benutzer bestätigte Orte
-- Für jeden Ort zwei neue, mindestens 8 Sekunden getrennte Sensorberichte mit maximal 120 mm Standortdrift
-- Höchstens 250 mm Positionsabweichung gegenüber der gespeicherten Referenz
+## Installation
 
-Nach Erfolg lautet der Status \`pruefpunkte_bestanden\`. **Das ist ausschließlich eine bestätigte Koordinatendiagnose für den beobachteten Kartierungsdurchlauf, keine automatische Fahrfreigabe.** Bei neuer Reinigung, Kartenwechsel, veränderter Rotation oder widersprüchlichem Ergebnis wird die Prüfung ungültig. Ein nicht erkennbarer Kartenreset kann ohne robuste Kartenkennung nicht immer automatisch festgestellt werden. Deshalb bleibt automatische Navigation vollständig deaktiviert.
+Home Assistant Marketplace → Roberto Zones → Release \`v0.6.1\` erneut herunterladen → Home Assistant Core neu starten. Die bestehende Karte und gespeicherte Kontrollpunkte bleiben erhalten.
 
-## Wichtige Grenzen
-
-Die Xiaomi-Positionsdaten kommen mit der beobachteten Cloud-/Map-Extractor-Verzögerung. Home Assistant kann die wirkliche Messzeit am Roboter nicht garantieren. Auch ein korrekt gemeldeter Ankunftspunkt sagt nichts über die Sicherheit der **Route** aus. Der Xiaomi V1 kann den gesamten Weg abweichend planen und seine Haupt- und Seitenbürsten mitlaufen lassen. Die sieben No-Go-Zonen sind nicht technisch erzwungen.
-
-Bei fehlender Kalibrierung, veralteten Messdaten, unklarer Kartendrehung, nicht gefundenem Dock oder unzureichender Anzahl/Verteilung der Prüfpunkte bleibt der Status gesperrt.
-
-## Deine bestehende Xiaomi Vacuum Map Card bleibt unverändert
+Die unveränderte Live-Karten-Steuerung:
 
 \`\`\`yaml
 type: custom:xiaomi-vacuum-map-card
@@ -53,6 +37,8 @@ map_modes:
   - template: vacuum_clean_zone
 \`\`\`
 
-Ein zusätzlicher \`vacuum_goto\`-Kartenmodus kann verwendet werden, ist für Roberto Zones 0.6.0 selbst aber keine Voraussetzung.
+## Diagnose
 
-Die Integration wurde bisher nur anhand synthetischer Offline-Daten getestet. Kein Test auf deiner Home-Assistant-VM und keine garantierte No-Go-Zonen-Funktion.
+Wenn die Überlagerung nebeneinander bleibt, liegt **kein Fehler im Kartenbild** vor: Roberto Zones hat noch keine robuste Zuordnung gefunden. Es kann erforderlich sein, zuerst weitere markante Wände zu kartieren. Es werden weiterhin **keine** neuen Steuerbefehle an Roberto gesendet.
+
+Tests prüfen insbesondere wechselnde Kandidatendrehungen, identische statt neuer Quellbilder, ungültige Ladeanker und das Sperren nach einem Kartenreset. Dies wurde noch nicht auf deiner Home-Assistant-Installation getestet.

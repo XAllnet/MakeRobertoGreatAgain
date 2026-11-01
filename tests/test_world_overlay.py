@@ -81,6 +81,26 @@ class RegistrationTests(unittest.TestCase):
         self.assertFalse(result["navigation_coordinates_verified"])
         self.assertFalse(result["can_send_automatic_targets"])
 
+    def test_no_preview_before_stability(self):
+        data = png(asymmetric_image())
+        _, result = module.build_overlay(
+            data, data, CAL, CAL, DOCK, DOCK, DOCK,
+            preview_gate={},
+        )
+        self.assertEqual(
+            result["overlay_mode"], "side_by_side_awaiting_stability"
+        )
+        self.assertFalse(result["navigation_coordinates_verified"])
+
+    def test_preview_with_matching_consensus(self):
+        data = png(asymmetric_image())
+        _, result = module.build_overlay(
+            data, data, CAL, CAL, DOCK, DOCK, DOCK,
+            preview_gate={"rotation_degrees": 0, "shift_mm": [0, 0]},
+        )
+        self.assertEqual(result["overlay_mode"], "rotation_corrected_diagnostic")
+        self.assertFalse(result["can_send_automatic_targets"])
+
     def test_rotated_live_map_alignment(self):
         reference = asymmetric_image()
         live = reference.rotate(

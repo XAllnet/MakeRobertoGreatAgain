@@ -30,6 +30,7 @@ from .const import (
 from .matcher import compare
 from .reference_image import prepare_reference_image, MAX_INPUT_BYTES
 from .world_overlay import build_overlay, parse_position
+from .registration_consensus import RegistrationConsensus
 from .manual_test import SupervisedDrive, TEST_STEPS
 from .verification import CheckpointSession, candidate_is_usable
 
@@ -72,6 +73,8 @@ class RobertoController:
             hass.config.path("roberto_zones", "checkpoints.json")
         )
         self._latest_overlay_info: dict = {}
+        self._registration_consensus = RegistrationConsensus()
+        self._seen_map_identity = None
 
     @property
     def map_entity(self):
@@ -280,6 +283,7 @@ class RobertoController:
             self.hass, entities, self._handle_change
         ))
         self._refresh_position(self.hass.states.get(self.map_entity))
+        self._seen_map_identity = self._current_map_identity()
         self._schedule(4.0)
 
     @callback
@@ -296,6 +300,7 @@ class RobertoController:
         if new.entity_id == self.vacuum_entity:
             if new.state == "cleaning" and (old is None or old.state != "cleaning"):
                 self.verifier.invalidate("neuer_reinigungsvorgang")
+                self._registration_consensus.reset("neuer_reinigungsvorgang")
                 self.run_count += 1
                 self.status = "neuer_reinigungsvorgang"
                 self.rotation = None
@@ -314,6 +319,16 @@ class RobertoController:
         if new.entity_id == self.map_entity and (
             old is None or old.state != new.state or old.attributes != new.attributes
         ):
+            identity = self._current_map_identity()
+            if (
+                self._seen_map_identity is not None
+                and identity is not None
+                and identity != self._seen_map_identity
+            ):
+                self._registration_consensus.reset("kartenkennung_gewechselt")
+                self.verifier.invalidate("kartenkennung_gewechselt")
+            if identity is not None:
+                self._seen_map_identity = identity
             self.last_map_state = new.state
             # Fallback for older extractors that expose position on the image.
             if not self._position_entity:
@@ -445,6 +460,7 @@ class RobertoController:
                 return build_overlay(
                     reference_bytes, image.content, reference_calibration,
                     calibration, robot, charger, reference_charger,
+                    preview_gate=self._registration_consensus.can_preview() or {},
                 )
 
             overlay, overlay_info = await self.hass.async_add_executor_job(
@@ -453,6 +469,15 @@ class RobertoController:
             if not self._closed:
                 self.overlay_bytes = overlay
                 self.overlay_time = datetime.now().astimezone()
+            # Require multiple different, agreeing map silhouettes. A
+            # single plausible candidate is NOT an alignment confirmation.
+            raw_candidate = overlay_info.get("visual_alignment_candidate", False)
+            temporally_stable = self._registration_consensus.observe(overlay_info)
+            overlay_info["instant_visual_candidate"] = raw_candidate
+            overlay_info["visual_alignment_candidate"] = bool(
+                raw_candidate and temporally_stable
+            )
+            overlay_info.update(self._registration_consensus.info())
             self._latest_overlay_info = overlay_info
             self.verifier.check_map(
                 overlay_info, self.run_count, self._current_map_identity()
@@ -482,7 +507,11 @@ class RobertoController:
             elif not overlay_info["live_calibrated"]:
                 self.status = "live_kalibrierung_fehlt"
             elif not overlay_info.get("visual_alignment_candidate", False):
-                self.status = "ausrichtung_nicht_bestaetigt"
+                self.status = (
+                    "ausrichtung_noch_nicht_stabil"
+                    if raw_candidate and not temporally_stable
+                    else "ausrichtung_nicht_bestaetigt"
+                )
             elif overlay_info.get("anchor_assumed", True):
                 self.status = "anker_nicht_bestaetigt"
             elif not robot:
@@ -557,6 +586,7 @@ class RobertoController:
             meta_tmp.replace(self._reference_meta)
 
         await self.hass.async_add_executor_job(save)
+        self._registration_consensus.reset("neue_referenz")
         self.verifier.initialize_reference(hashlib.sha256(raw).hexdigest())
         await self.async_save_checkpoints()
         self.status = "referenz_gespeichert"
@@ -604,6 +634,7 @@ class RobertoController:
             metadata = await self.hass.async_add_executor_job(read_prepare_and_write)
         except (OSError, ValueError) as exc:
             raise HomeAssistantError(f"Referenzimport fehlgeschlagen: {exc}") from exc
+        self._registration_consensus.reset("neue_referenz")
         self.verifier.invalidate("referenz_ohne_kalibrierung_importiert")
         self.verifier.reference_points.clear()
         self.verifier.reference_hash = None

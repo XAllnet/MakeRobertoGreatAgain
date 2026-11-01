@@ -5,6 +5,7 @@ Everything here is a diagnostic visualization, not a path-planning system.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from io import BytesIO
@@ -133,13 +134,15 @@ def _dot(draw, p, color, label=None, radius=7):
 
 
 def build_overlay(reference, live, reference_points=None, live_points=None,
-                  robot=None, charger=None, reference_charger=None):
+                  robot=None, charger=None, reference_charger=None,
+                  preview_gate=None):
     """Return PNG and always-conservative diagnostics.
 
     If historical reference lacks its own image->world calibration, generate
     two *separate* images. Never pretend they share a coordinate frame.
     """
     refmask, livemask = floor_mask(reference), floor_mask(live)
+    live_fingerprint = hashlib.sha256(livemask.tobytes()).hexdigest()
     ref_t, live_t = calibration_matrix(reference_points), calibration_matrix(live_points)
     result = {
         "reference_calibrated": ref_t is not None,
@@ -148,6 +151,7 @@ def build_overlay(reference, live, reference_points=None, live_points=None,
         "charger_position_available": charger is not None,
         "navigation_coordinates_verified": False,
         "can_send_automatic_targets": False,
+        "live_mask_fingerprint": live_fingerprint,
     }
     if robot:
         result["robot_world_x"] = robot["x"]
@@ -217,51 +221,87 @@ def build_overlay(reference, live, reference_points=None, live_points=None,
             result["visual_alignment_candidate"] = alignment["candidate_distinct"]
             result["physical_alignment_verified"] = False
             result["coordinate_transform_approved"] = False
-            rotated = warp_full(
-                livemask, refmask.shape, alignment["ref_to_live_pixel"]
+            gate_ok = (
+                preview_gate is None
+                or (
+                    isinstance(preview_gate, dict)
+                    and preview_gate.get("rotation_degrees") == alignment["rotation_degrees"]
+                    and isinstance(preview_gate.get("shift_mm"), list)
+                    and len(preview_gate["shift_mm"]) == 2
+                    and math.dist(
+                        preview_gate["shift_mm"], alignment["shift_mm"]
+                    ) <= 120
+                )
             )
-            refimg = _floor_render(refmask, "#567b91")
-            image_data = np.asarray(refimg).copy()
-            image_data[rotated] = (85, 214, 225)
-            canvas = Image.fromarray(image_data, "RGB")
-            pen = ImageDraw.Draw(canvas)
-            inv_ref = np.linalg.inv(ref_t)
-            mapping = alignment["world_live_to_ref"]
-            if robot:
-                source = np.array([robot["x"], robot["y"], 1.])
-                px = inv_ref @ mapping @ source
-                if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
-                    _dot(pen, (round(px[0]), round(px[1])), "#ffca65", "Roberto")
-            if charger:
-                px = inv_ref @ mapping @ np.array([
-                    charger["x"], charger["y"], 1.
-                ])
-                if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
-                    _dot(pen, (round(px[0]), round(px[1])), "#a4f49c", "Dock", radius=5)
-            canvas = _fit_in(canvas, (1000, 900))
-            board = Image.new("RGB", (1020, canvas.height + 65), "#0d1b2a")
-            board.paste(canvas, ((1020-canvas.width)//2, 54))
-            pen = ImageDraw.Draw(board)
-            certainty = "UNBESTAETIGT" if not alignment["candidate_distinct"] else "NUR KANDIDAT"
-            pen.text(
-                (14, 10),
-                f'{certainty}: gedreht {alignment["rotation_degrees"]} Grad; '
-                f'Score {alignment["best_score"]:.2f}, '
-                f'Abstand {alignment["score_gap"]:.2f}',
-                fill="#f5c768" if alignment["candidate_distinct"] else "#ff9b9b",
-            )
-            pen.text(
-                (14, 27),
-                "Grau: Referenz | Tuerkis: aktuelle Karte | KEINE FAHRFREIGABE",
-                fill="#c2d6de",
-            )
-            result["overlay_mode"] = "rotation_corrected_diagnostic"
-            result["reason"] = (
-                "Kartendrehung als Kandidat gefunden; "
-                "Dock und echte Zielpunkte extern pruefen"
-                if alignment["candidate_distinct"]
-                else "Orientierung unklar: Teilkarte oder mehrdeutiger Grundriss"
-            )
+            if not alignment["candidate_distinct"] or not gate_ok:
+                # Crucial: do not render an unverified or jumping rotation
+                # as a seemingly registered overlay.
+                board = Image.new("RGB", (1050, 540), "#0d1b2a")
+                refimg = _fit_in(_floor_render(refmask, "#6b96b3"), (480, 470))
+                liveimg = _fit_in(_floor_render(livemask, "#61d2df"), (480, 470))
+                board.paste(refimg, (30+(480-refimg.width)//2, 42+(470-refimg.height)//2))
+                board.paste(liveimg, (555+(480-liveimg.width)//2, 42+(470-liveimg.height)//2))
+                pen = ImageDraw.Draw(board)
+                pen.text(
+                    (12, 10),
+                    f'UNBESTAETIGT: {alignment["rotation_degrees"]} Grad, '
+                    f'Score {alignment["best_score"]:.2f}, '
+                    f'Abstand {alignment["score_gap"]:.2f}',
+                    fill="#ff9b9b",
+                )
+                pen.text((24, 519), "REFERENZ (links) / LIVE (rechts) - KEINE FAHRFREIGABE", fill="#ffffff")
+                result["overlay_mode"] = "side_by_side_awaiting_stability"
+                result["reason"] = (
+                    "Mehrdeutige Kartendrehung oder zu wenig Raumgeometrie"
+                    if not alignment["candidate_distinct"]
+                    else "Warte auf mehrere konsistente Kartenupdates"
+                )
+            else:
+                rotated = warp_full(
+                    livemask, refmask.shape, alignment["ref_to_live_pixel"]
+                )
+                refimg = _floor_render(refmask, "#567b91")
+                image_data = np.asarray(refimg).copy()
+                image_data[rotated] = (85, 214, 225)
+                canvas = Image.fromarray(image_data, "RGB")
+                pen = ImageDraw.Draw(canvas)
+                inv_ref = np.linalg.inv(ref_t)
+                mapping = alignment["world_live_to_ref"]
+                if robot:
+                    source = np.array([robot["x"], robot["y"], 1.])
+                    px = inv_ref @ mapping @ source
+                    if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
+                        _dot(pen, (round(px[0]), round(px[1])), "#ffca65", "Roberto")
+                if charger:
+                    px = inv_ref @ mapping @ np.array([
+                        charger["x"], charger["y"], 1.
+                    ])
+                    if 0 <= px[0] < canvas.width and 0 <= px[1] < canvas.height:
+                        _dot(pen, (round(px[0]), round(px[1])), "#a4f49c", "Dock", radius=5)
+                canvas = _fit_in(canvas, (1000, 900))
+                board = Image.new("RGB", (1020, canvas.height + 65), "#0d1b2a")
+                board.paste(canvas, ((1020-canvas.width)//2, 54))
+                pen = ImageDraw.Draw(board)
+                certainty = "UNBESTAETIGT" if not alignment["candidate_distinct"] else "NUR KANDIDAT"
+                pen.text(
+                    (14, 10),
+                    f'{certainty}: gedreht {alignment["rotation_degrees"]} Grad; '
+                    f'Score {alignment["best_score"]:.2f}, '
+                    f'Abstand {alignment["score_gap"]:.2f}',
+                    fill="#f5c768" if alignment["candidate_distinct"] else "#ff9b9b",
+                )
+                pen.text(
+                    (14, 27),
+                    "Grau: Referenz | Tuerkis: aktuelle Karte | KEINE FAHRFREIGABE",
+                    fill="#c2d6de",
+                )
+                result["overlay_mode"] = "rotation_corrected_diagnostic"
+                result["reason"] = (
+                    "Kartendrehung als Kandidat gefunden; "
+                    "Dock und echte Zielpunkte extern pruefen"
+                    if alignment["candidate_distinct"]
+                    else "Orientierung unklar: Teilkarte oder mehrdeutiger Grundriss"
+                )
     buf = BytesIO()
     board.save(buf, format="PNG", optimize=True)
     return buf.getvalue(), result

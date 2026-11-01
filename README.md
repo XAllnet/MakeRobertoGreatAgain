@@ -1,24 +1,15 @@
-# MakeRobertoGreatAgain — Roberto Zones
+# MakeRobertoGreatAgain — Roberto Zones 0.6.1
 
-## 0.6.0: operator-confirmed coordinate verification
+Experimental Home Assistant custom integration for Xiaomi Mi Robot Vacuum V1. **No automated navigation or software-enforced no-go zones.**
 
-This is an experimental Home Assistant custom integration for Xiaomi Mi Robot Vacuum V1. The map overlay and position sensors remain diagnostic. **No automatic robot navigation, no enforced no-go zones, and no new vacuum commands** were added in 0.6.0. The existing supervised manual-test services remain available.
+### 0.6.1: prevent unstable preview rotation
 
-### Installation
+Previous versions could render a misleading rotated overlay even when the map similarity score was below the confidence threshold and the best and second-best 90-degree orientations were nearly tied. A clipped partial map could also get an artificially high match score.
 
-Install the latest tagged release from https://github.com/XAllnet/MakeRobertoGreatAgain through Home Assistant Marketplace. Restart Home Assistant Core.
+The update scores overlap against the full live map mask, reduces edge-matching tolerance, penalizes cropping, and refines translations at 50 mm resolution around a bounded coarse estimate. When a candidate is ambiguous, reference and live maps are presented **side by side** instead of showing an unconfirmed rotation.
 
-### Workflow
+An overlay preview requires three **different map-mask images**, each yielding the same rotation and a similar translation while the dock anchor is known. Reanalysis of identical imagery does not count. Map reset or changing candidates clears this visual consensus. It is *not independent physical verification*.
 
-1. Use a **complete native live map**, not an AI-drawn image or historical screenshot. Enable the Xiaomi Cloud Map Extractor's optional \`vacuum_position\` and \`charger_position\` sensors.
-2. Run \`roberto_zones.capture_reference\`. This also resets any older landmark baseline because it is bound to the exact reference image hash.
-3. On that same reference map, physically visit at least three well-separated, non-collinear landmarks using your **existing** live Xiaomi Vacuum Map Card. At each landmark, wait until stopped, run \`roberto_zones.record_reference_point\` with the unique name and physical confirmation. Repeat the same action at least 8 seconds later after a **new** position-source report. Names persist only in Home Assistant's private \`/config/roberto_zones/checkpoints.json\`.
-4. After a **new map run**, first establish a unique, dock-anchored image registration. Run \`roberto_zones.begin_verification\`.
-5. Visit the same physical landmarks using your existing live-map controls. At each point, run \`roberto_zones.verify_checkpoint\` twice (new report required) with an independent physical confirmation.
-6. Read **Koordinatenprüfung** sensor, residuals and reasons. All three landmarks must match within 250 mm; sampled stationary position must drift <=120 mm and map source reports must be fresh.
+Version 0.6.0's manual checkpoint recording/verification services remain available. No new movement commands were added. Xiaomi positions may be cloud-delayed; checkpoint verification is only meaningful after stationary, fresh reports and physical confirmation. Refer to [README_DE.md](README_DE.md).
 
-On map reset, a changed image orientation, ambiguous map contours, unavailable dock calibration, stale coordinates, or a mismatch, results are invalidated or blocked. Source timestamps are Home Assistant update timestamps and may not reflect robot measurement latency.
-
-A passed diagnostic **never** calls \`vacuum_goto\` and never permits unattended travel or software-enforced no-go zones. A correct destination does not prove a collision-free route.
-
-See [README_DE.md](README_DE.md) for the complete German procedure and current dashboard card YAML.
+Install a tagged release in the Home Assistant Marketplace and restart Home Assistant Core.
