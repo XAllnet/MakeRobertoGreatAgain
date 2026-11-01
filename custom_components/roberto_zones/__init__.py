@@ -30,6 +30,7 @@ from .const import (
 from .matcher import compare
 from .reference_image import prepare_reference_image, MAX_INPUT_BYTES
 from .world_overlay import build_overlay, parse_position
+from .native_geometry import extract_native_geometry
 from .registration_consensus import RegistrationConsensus
 from .manual_test import SupervisedDrive, TEST_STEPS
 from .verification import CheckpointSession, candidate_is_usable
@@ -59,6 +60,9 @@ class RobertoController:
         self._closed = False
         self._reference = Path(hass.config.path("roberto_zones", "reference.png"))
         self._reference_meta = Path(hass.config.path("roberto_zones", "reference_calibration.json"))
+        self._geometry_reference = Path(hass.config.path("roberto_zones", "reference_geometry.png"))
+        self._geometry_meta = Path(hass.config.path("roberto_zones", "reference_geometry.json"))
+        self._reference_baseline_active = False
         self.overlay_bytes: bytes | None = None
         self.overlay_time: datetime | None = None
         self.position: dict | None = None
@@ -209,16 +213,14 @@ class RobertoController:
                 "Referenzphase nicht aktiv. Erst vollständige Karte mit "
                 "roberto_zones.capture_reference sichern"
             )
-        if not candidate_is_usable(self._latest_overlay_info):
-            raise HomeAssistantError("Referenz und Live-Karte sind nicht eindeutig ausgerichtet")
-        if (
-            self._latest_overlay_info.get("rotation_candidate_degrees") != 0
-            or sum(abs(v) for v in self._latest_overlay_info.get(
-                "relative_shift_candidate_mm", (999, 999)
-            )) > 150
-        ):
+        if not self._reference_baseline_active:
             raise HomeAssistantError(
-                "Live-Karte entspricht nicht der gespeicherten Referenzphase"
+                "Die Referenzpunkterfassung muss in derselben laufenden "
+                "Home-Assistant-Sitzung wie capture_reference stattfinden."
+            )
+        if not self._latest_overlay_info.get("geometry_only", False):
+            raise HomeAssistantError(
+                "Native Geometrie aktuell nicht verfügbar; Punktaufnahme gesperrt"
             )
         stable = self._sample_position(name)
         if stable is None:
@@ -300,6 +302,7 @@ class RobertoController:
         if new.entity_id == self.vacuum_entity:
             if new.state == "cleaning" and (old is None or old.state != "cleaning"):
                 self.verifier.invalidate("neuer_reinigungsvorgang")
+                self._reference_baseline_active = False
                 self._registration_consensus.reset("neuer_reinigungsvorgang")
                 self.run_count += 1
                 self.status = "neuer_reinigungsvorgang"
@@ -327,6 +330,7 @@ class RobertoController:
             ):
                 self._registration_consensus.reset("kartenkennung_gewechselt")
                 self.verifier.invalidate("kartenkennung_gewechselt")
+                self._reference_baseline_active = False
             if identity is not None:
                 self._seen_map_identity = identity
             self.last_map_state = new.state
@@ -401,6 +405,45 @@ class RobertoController:
             if position is not None else None
         )
 
+    def _cached_native_map(self, image_bytes: bytes):
+        """Read the existing Map Extractor coordinator data (no extra cloud IO).
+
+        This is a private alpha-v3 Map Extractor API. Verify ownership,
+        versioned structure and image bytes, and otherwise fail closed.
+        """
+        entity = er.async_get(self.hass).async_get(self.map_entity)
+        if entity is None or entity.platform != "xiaomi_cloud_map_extractor":
+            return None
+        config_entry = self.hass.config_entries.async_get_entry(entity.config_entry_id)
+        if config_entry is None or config_entry.domain != "xiaomi_cloud_map_extractor":
+            return None
+        runtime = getattr(config_entry, "runtime_data", None)
+        coordinator = getattr(runtime, "coordinator", None)
+        cache = getattr(coordinator, "data", None)
+        if (
+            cache is None
+            or not isinstance(getattr(cache, "map_image", None), bytes)
+            or cache.map_image != image_bytes
+        ):
+            return None
+        return getattr(cache, "map_data", None)
+
+    @callback
+    def _geometry_unavailable(self, code: str, explanation: str):
+        self.status = code
+        self.rotation = None
+        self._latest_overlay_info = {}
+        self.overlay_bytes = None
+        self.overlay_time = datetime.now().astimezone()
+        self.details = {
+            "reason": explanation,
+            "geometry_only": True,
+            "navigation_coordinates_verified": False,
+            "can_send_automatic_targets": False,
+        }
+        self._registration_consensus.reset(code)
+        self.verifier.invalidate(code)
+
     async def async_analyze(self) -> None:
         if self._closed:
             return
@@ -433,39 +476,94 @@ class RobertoController:
                 self.status = "karte_waehrend_auslesen_aktualisiert"
                 self._schedule(DEBOUNCE_SECONDS)
                 return
-            reference_bytes = await self.hass.async_add_executor_job(
-                self._reference.read_bytes
-            )
-            try:
-                result = await self.hass.async_add_executor_job(
-                    compare, image.content, reference_bytes
+            map_data = self._cached_native_map(image.content)
+            if map_data is None:
+                self._geometry_unavailable(
+                    "native_geometrie_nicht_verfuegbar",
+                    "Kein synchroner v3-Map-Extractor-Cache; keine Pixelbild-Heuristik als Ersatz",
                 )
-            except ValueError:
-                result = {"candidate_is_distinct": False,
-                          "note": "Silhouettenvergleich noch nicht möglich"}
-            robot = self._get_map_position(self._position_entity, "vacuum_position", state)
-            charger = self._get_map_position(self._charger_entity, "charger", state)
-            # Do not overwrite the fast, event-driven position sensor.
-            # The image rendering below uses the coordinate snapshot from
-            # this specific map analysis, not necessarily the newest reading.
+                return
+            try:
+                live_geometry, live_calibration, geometry_diag = (
+                    await self.hass.async_add_executor_job(
+                        extract_native_geometry, map_data, calibration,
+                    )
+                )
+            except ValueError as err:
+                self._geometry_unavailable(
+                    "native_geometrie_nicht_verfuegbar", str(err)
+                )
+                return
+            if not self._geometry_reference.is_file() or not self._geometry_meta.is_file():
+                self._geometry_unavailable(
+                    "referenz_geometrie_fehlt",
+                    "Einmalige neue vollständige Referenz nötig: "
+                    "roberto_zones.capture_reference (Version 0.6.2)",
+                )
+                return
+
+            robot = self._get_map_position(
+                self._position_entity, "vacuum_position", state
+            )
+            charger = self._get_map_position(
+                self._charger_entity, "charger", state
+            )
 
             def prepare_overlay():
-                reference_calibration = None
-                reference_charger = None
-                if self._reference_meta.is_file():
-                    stored = json.loads(self._reference_meta.read_text(encoding="utf-8"))
-                    if stored.get("sha256") == hashlib.sha256(reference_bytes).hexdigest():
-                        reference_calibration = stored.get("calibration_points")
-                        reference_charger = stored.get("charger_position")
-                return build_overlay(
-                    reference_bytes, image.content, reference_calibration,
-                    calibration, robot, charger, reference_charger,
-                    preview_gate=self._registration_consensus.can_preview() or {},
+                reference_geometry = self._geometry_reference.read_bytes()
+                reference_original = self._reference.read_bytes()
+                stored = json.loads(self._geometry_meta.read_text(encoding="utf-8"))
+                if (
+                    stored.get("schema") != 2
+                    or stored.get("rendered_sha256") != hashlib.sha256(reference_original).hexdigest()
+                    or stored.get("geometry_sha256") != hashlib.sha256(reference_geometry).hexdigest()
+                ):
+                    raise ValueError("Referenzgeometrie und Originalkarte stimmen nicht überein")
+                reference_calibration = stored.get("geometry_calibration")
+                reference_charger = stored.get("charger_position")
+                try:
+                    shape_compare = compare(live_geometry, reference_geometry)
+                except ValueError:
+                    shape_compare = {
+                        "candidate_is_distinct": False,
+                        "note": "Silhouettenvergleich noch nicht möglich",
+                    }
+                return (
+                    build_overlay(
+                        reference_geometry, live_geometry,
+                        reference_calibration, live_calibration, robot, charger,
+                        reference_charger,
+                        preview_gate=self._registration_consensus.can_preview() or {},
+                    ),
+                    shape_compare,
                 )
 
-            overlay, overlay_info = await self.hass.async_add_executor_job(
+            (overlay, overlay_info), result = await self.hass.async_add_executor_job(
                 prepare_overlay
             )
+            # The native geometry and rendered image represent one cached
+            # map revision. Never use them if the coordinator has since moved.
+            if self._cached_native_map(image.content) is not map_data:
+                self._geometry_unavailable(
+                    "karte_waehrend_auslesen_aktualisiert",
+                    "Quellkarte wurde während der Berechnung ersetzt",
+                )
+                self._schedule(DEBOUNCE_SECONDS)
+                return
+            overlay_info.update(geometry_diag)
+            overlay_info["geometry_only"] = True
+            overlay_info["no_path_fallback"] = True
+            overlay_info["source_image_timestamp"] = state.state
+            overlay_info["calibration_points"] = live_calibration
+            overlay_info["map_entity"] = self.map_entity
+            overlay_info["vacuum_entity"] = self.vacuum_entity
+            overlay_info["reference_file_local"] = "roberto_zones/reference_geometry.png"
+            overlay_info["charger_entity"] = self._charger_entity
+            overlay_info["position_entity"] = self._position_entity
+            overlay_info["position_source"] = self.position_source
+            overlay_info["position_sensor_last_updated"] = self.position_source_last_changed
+            overlay_info["overlay_uses_position_snapshot"] = True
+            overlay_info["run_count_observed_since_setup"] = self.run_count
             if not self._closed:
                 self.overlay_bytes = overlay
                 self.overlay_time = datetime.now().astimezone()
@@ -499,8 +597,9 @@ class RobertoController:
                 "run_count_observed_since_setup": self.run_count,
             }
             self.rotation = (
-                result.get("candidate_rotation_degrees")
-                if result.get("candidate_is_distinct") else None
+                overlay_info.get("rotation_candidate_degrees")
+                if overlay_info.get("visual_alignment_candidate", False)
+                else None
             )
             if not overlay_info["reference_calibrated"]:
                 self.status = "referenz_ohne_koordinaten"
@@ -562,6 +661,27 @@ class RobertoController:
         if not raw or len(raw) > 10_000_000:
             raise HomeAssistantError("Kartendatei leer oder ungewöhnlich groß")
 
+        calibration = state.attributes.get("calibration_points")
+        map_data = self._cached_native_map(raw)
+        if map_data is None:
+            raise HomeAssistantError(
+                "Die native Geometrie aus dem Map-Extractor-Cache fehlt; "
+                "Referenz wurde nicht überschrieben."
+            )
+        try:
+            native_bytes, native_calibration, native_info = (
+                await self.hass.async_add_executor_job(
+                    extract_native_geometry, map_data, calibration
+                )
+            )
+        except ValueError as err:
+            raise HomeAssistantError(
+                f"Native Referenzgeometrie kann nicht erfasst werden: {err}"
+            ) from err
+        if self._cached_native_map(raw) is not map_data:
+            raise HomeAssistantError(
+                "Karte während der Aufnahme aktualisiert; bitte erneut versuchen"
+            )
         charger_position = self._get_map_position(
             self._charger_entity, "charger", state
         )
@@ -584,10 +704,29 @@ class RobertoController:
             meta_tmp = self._reference_meta.with_suffix(".tmp")
             meta_tmp.write_text(json.dumps(values), encoding="utf-8")
             meta_tmp.replace(self._reference_meta)
+            geometry_tmp = self._geometry_reference.with_suffix(".tmp")
+            geometry_tmp.write_bytes(native_bytes)
+            geometry_tmp.replace(self._geometry_reference)
+            geometry_metadata = {
+                "schema": 2,
+                "rendered_sha256": hashlib.sha256(raw).hexdigest(),
+                "geometry_sha256": native_info["geometry_sha256"],
+                "geometry_calibration": native_calibration,
+                "charger_position": charger_position,
+                "source": "shared_map_extractor_native_cache",
+                "contains_robot_path": False,
+                "contains_robot_marker": False,
+            }
+            meta_geometry_tmp = self._geometry_meta.with_suffix(".tmp")
+            meta_geometry_tmp.write_text(
+                json.dumps(geometry_metadata), encoding="utf-8"
+            )
+            meta_geometry_tmp.replace(self._geometry_meta)
 
         await self.hass.async_add_executor_job(save)
         self._registration_consensus.reset("neue_referenz")
         self.verifier.initialize_reference(hashlib.sha256(raw).hexdigest())
+        self._reference_baseline_active = True
         await self.async_save_checkpoints()
         self.status = "referenz_gespeichert"
         self.details = {
@@ -628,6 +767,8 @@ class RobertoController:
             temp.replace(self._reference)
             # A historical screenshot has no trustworthy world calibration.
             self._reference_meta.unlink(missing_ok=True)
+            self._geometry_reference.unlink(missing_ok=True)
+            self._geometry_meta.unlink(missing_ok=True)
             return metadata
 
         try:
@@ -635,6 +776,7 @@ class RobertoController:
         except (OSError, ValueError) as exc:
             raise HomeAssistantError(f"Referenzimport fehlgeschlagen: {exc}") from exc
         self._registration_consensus.reset("neue_referenz")
+        self._reference_baseline_active = False
         self.verifier.invalidate("referenz_ohne_kalibrierung_importiert")
         self.verifier.reference_points.clear()
         self.verifier.reference_hash = None

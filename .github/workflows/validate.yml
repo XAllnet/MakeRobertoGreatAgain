@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install --disable-pip-version-check numpy pillow
+      - run: python -m pip install --disable-pip-version-check numpy pillow vacuum-map-parser-base==0.1.5
       - name: Compile every Python file
         run: python -m compileall -q custom_components/roberto_zones
       - name: Run offline overlay tests
